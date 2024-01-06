@@ -623,17 +623,19 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             let query_prefix_len = query_len as UUU;
             let node = &self.trie.nodes[node_id as usize];
             let matching = Matching::<'stored, UUU, SSS> {
-                query_prefix_len,
+                query_prefix_len, // i'' = i
                 node,
                 edit_distance,
             };
+            // the second kind
             new_active_matching_set.insert(matching);
         }
         // lines 10-11
         for matching in active_matching_set.iter() {
             // this condition appears to be for threshold-based autocomplete and not for top-k in META
             //if matching.deduced_prefix_edit_distance(query_len) <= threshold {
-            new_active_matching_set.insert(matching);
+            new_active_matching_set.insert(matching); // i'' < i
+            // the first kind
             //}
         }
         new_active_matching_set
