@@ -6,7 +6,7 @@ use std::{
     ops::Range,
 };
 
-use super::MeasuredPrefix;
+use super::{MeasuredPrefix, FromStrings};
 use crate::{levenshtein, Autocompleter};
 
 #[cfg(feature = "serde")]
@@ -753,6 +753,9 @@ impl Autocompleter for Yoke<MetaAutocompleter<'static>, Vec<String>> {
     ) -> Vec<MeasuredPrefix> {
         self.get().threshold_topk(query, requested, max_threshold)
     }
+}
+
+impl FromStrings for Yoke<MetaAutocompleter<'static>, Vec<String>> {
     fn from_strings(strings: &[&str]) -> Self {
         let cart = strings.iter().map(|&s| s.to_string()).collect();
         Yoke::attach_to_cart(cart, |strings| {

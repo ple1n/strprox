@@ -27,6 +27,9 @@ pub trait Autocompleter {
     fn autocomplete(&self, query: &str, requested: usize) -> Vec<MeasuredPrefix> {
         self.threshold_topk(query, requested, usize::MAX)
     }
+}
+
+pub trait FromStrings {
     /// Returns an autocompleter which has indexed `strings`
     fn from_strings(strings: &[&str]) -> Self;
 }

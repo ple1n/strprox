@@ -12,7 +12,7 @@ use crate::{
     levenshtein::{prefix_edit_distance, sample_edited_string, unindexed_autocomplete},
     strprox::FstAutocompleter,
     strprox::MetaAutocompleter,
-    Autocompleter, MeasuredPrefix,
+    Autocompleter, MeasuredPrefix, prefix::FromStrings,
 };
 
 type YokedMetaAutocompleter = Yoke<MetaAutocompleter<'static>, Vec<String>>;
@@ -28,13 +28,13 @@ const WORDS: &str = include_str!("words.txt");
 #[generic_tests::define]
 mod generic {
     use super::*;
-    use crate::{levenshtein, Autocompleter};
+    use crate::{levenshtein, Autocompleter, prefix::FromStrings};
 
     #[test]
     /// Example input from the paper on META (see the citations)
     fn meta_paper_example<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = vec!["soho", "solid", "solo", "solve", "soon", "throw"];
         let autocompleter = A::from_strings(&source);
@@ -51,7 +51,7 @@ mod generic {
     /// Tests that autocomplete can return exact associated categories
     fn two_categories<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = vec![
             "success",
@@ -94,7 +94,7 @@ mod generic {
     /// The example in the README
     fn example<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = vec![
             "success",
@@ -121,7 +121,7 @@ mod generic {
     #[test]
     fn insertion_ped<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let query = "foob";
         // PEDs: [1, 2, 2]
@@ -141,7 +141,7 @@ mod generic {
     /// Tests for correction of a misspelling against a large database
     fn words_misspelling<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = WORDS.lines().collect();
         let time = Instant::now();
@@ -161,7 +161,7 @@ mod generic {
     /// Tests for error-tolerant autocompletion against a large database
     fn words_autocomplete<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
@@ -191,7 +191,7 @@ mod generic {
     /// Tests for error-tolerant autocompletion against a large database
     fn words_long_query<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
@@ -209,7 +209,7 @@ mod generic {
     /// Tests that any result has a PED under the given threshold
     fn words_threshold_topk<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
@@ -229,7 +229,7 @@ mod generic {
     /// Tests for error-tolerant autocompletion against a large database
     fn words_long_query_exist<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
@@ -247,7 +247,7 @@ mod generic {
     /// Tests that the result from an empty query still has strings
     fn empty_query_test<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = WORDS.lines().collect();
         println!("words {}", source.len());
@@ -263,7 +263,7 @@ mod generic {
     /// Simultaneously tests that the prefix edit distances are correct
     fn words_bounded_peds<A>()
     where
-        A: Autocompleter,
+        A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
@@ -302,7 +302,7 @@ mod generic {
 
     #[instantiate_tests(<YokedMetaAutocompleter>)]
     mod meta {}
-    #[instantiate_tests(<FstAutocompleter>)]
+    #[instantiate_tests(<FstAutocompleter<Vec<u8>>>)]
     mod fst {}
 }
 

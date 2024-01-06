@@ -14,15 +14,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{levenshtein, MeasuredPrefix};
 
-use super::{Autocompleter, PrefixRanking, PrefixRankings};
+use super::{Autocompleter, PrefixRanking, PrefixRankings, FromStrings};
 
 /// Supports error-tolerant autocompletion against a finite-state transducer index
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct FstAutocompleter {
-    pub index: Fst<Vec<u8>>,
+pub struct FstAutocompleter<D: AsRef<[u8]>> {
+    pub index: Fst<D>,
 }
 
-impl Autocompleter for FstAutocompleter {
+impl<D: AsRef<[u8]>> Autocompleter for FstAutocompleter<D> {
     fn threshold_topk(&self, query: &str, requested: usize, max_threshold: usize) -> Vec<MeasuredPrefix> {
         if requested == 0 {
             return vec![];
@@ -69,6 +69,9 @@ impl Autocompleter for FstAutocompleter {
 
         rankings.into_measures()
     }
+}
+
+impl FromStrings for FstAutocompleter<Vec<u8>> {
     fn from_strings(strings: &[&str]) -> Self {
         let mut source = strings.to_owned();
         source.sort();
@@ -79,9 +82,9 @@ impl Autocompleter for FstAutocompleter {
 }
 
 /// Iterator over the next characters and associated states from a node in a FST
-struct NodeCharIterator<'f, 'n> {
+struct NodeCharIterator<'f, 'n, D: AsRef<[u8]>> {
     /// FST used to retrieve the nodes associated with the next characters
-    fst: &'f Fst<Vec<u8>>,
+    fst: &'f Fst<D>,
     /// Nodes before the transitions
     nodes: [Option<Node<'n>>; 4],
     /// Indices for possible transitions needed to fill a character
@@ -92,7 +95,7 @@ struct NodeCharIterator<'f, 'n> {
     last: u8,
 }
 
-impl<'f: 'n, 'n: 'f> NodeCharIterator<'f, 'n> {
+impl<'f: 'n, 'n: 'f, D: AsRef<[u8]>> NodeCharIterator<'f, 'n, D> {
     /// Returns the char at the iterator
     fn get_char(&self) -> char {
         std::str::from_utf8(&self.bytes[0..=self.last as usize])
@@ -131,7 +134,7 @@ impl<'f: 'n, 'n: 'f> NodeCharIterator<'f, 'n> {
         self.initialize_subsequent_nodes(transition);
     }
     /// Returns an iterator over all characters and associated nodes after the `node` in `fst`
-    fn new(fst: &'f Fst<Vec<u8>>, node: &'f Node<'n>) -> Self {
+    fn new(fst: &'f Fst<D>, node: &'f Node<'n>) -> Self {
         Self {
             fst,
             nodes: [Some(node.clone()), None, None, None],
@@ -142,7 +145,7 @@ impl<'f: 'n, 'n: 'f> NodeCharIterator<'f, 'n> {
     }
 }
 
-impl<'f: 'n, 'n: 'f> Iterator for NodeCharIterator<'f, 'n> {
+impl<'f: 'n, 'n: 'f, D: AsRef<[u8]>> Iterator for NodeCharIterator<'f, 'n, D> {
     type Item = (Node<'n>, char);
     /// Returns Option with the next Node and character if possible
     fn next(&mut self) -> Option<Self::Item> {
@@ -175,9 +178,9 @@ impl<'f: 'n, 'n: 'f> Iterator for NodeCharIterator<'f, 'n> {
     }
 }
 
-impl FstAutocompleter {
+impl<D: AsRef<[u8]>> FstAutocompleter<D> {
     /// Returns FstAutocompleter using the FST `index`
-    pub fn new(index: Fst<Vec<u8>>) -> Self {
+    pub fn new(index: Fst<D>) -> Self {
         Self { index }
     }
     /// Searches for strings formed by the `prefix` and suffixes from `node` to rank
