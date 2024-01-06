@@ -17,7 +17,6 @@ use crate::{levenshtein, MeasuredPrefix};
 use super::{Autocompleter, PrefixRanking, PrefixRankings, FromStrings};
 
 /// Supports error-tolerant autocompletion against a finite-state transducer index
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct FstAutocompleter<D: AsRef<[u8]>> {
     pub index: Fst<D>,
 }

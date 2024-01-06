@@ -9,6 +9,7 @@ use std::{
 use super::{MeasuredPrefix, FromStrings};
 use crate::{levenshtein, Autocompleter};
 
+use debug_print::debug_println;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use yoke::{Yoke, Yokeable};
@@ -330,7 +331,7 @@ impl<'stored> Matching<'stored, UUU, SSS> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct MatchingSet<'stored, UUU, SSS> {
     /// Maps the first two parts of a matching to the edit distance
     pub matchings: HashMap<(UUU, &'stored Node<UUU, SSS>), UUU>,
@@ -509,6 +510,8 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         // this may need to become public along with MatchingSet to support result caching for previous query prefixes
         let character = query[query_len - 1];
 
+        debug_println!("A {} Tau {}", active_matching_set.matchings.len(), threshold);
+
         *active_matching_set = self.first_deducing(
             active_matching_set,
             character,
@@ -614,9 +617,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 });
             }
         }
-        let mut new_active_matching_set = MatchingSet::<'stored, UUU, SSS> {
-            matchings: Default::default(),
-        };
+        let mut new_active_matching_set = MatchingSet::<'stored, UUU, SSS>::default();
         // lines 8-9
         for (node_id, edit_distance) in best_edit_distances {
             let query_prefix_len = query_len as UUU;
