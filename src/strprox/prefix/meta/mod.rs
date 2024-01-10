@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cmp::{max, min, Ordering},
-    collections::{hash_map, HashMap, HashSet, BinaryHeap},
+    collections::{hash_map, BTreeSet, BinaryHeap, HashMap, HashSet},
     marker::PhantomData,
     ops::Range,
 };
@@ -750,47 +750,57 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         requested: usize,
         max_threshold: usize,
     ) -> Vec<MeasuredPrefix> {
-        let mut heap = BinaryHeap::new();
+        let mut heap = BTreeSet::new();
         let mut result: HashSet<TreeString<'stored>> = Default::default();
         let qchars: Vec<_> = query.chars().collect();
-        heap.push(MatchingNode::<UUU, SSS>::root(&self.trie));
+        heap.insert(MatchingNode::<UUU, SSS>::root(&self.trie));
         let format_result =
             |result: HashSet<TreeString>| format_result(result, query, max_threshold);
         while heap.len() > 0 && result.len() < requested {
-            let mn = heap.pop().unwrap();
-            let mn_node = &self.trie.nodes[mn.id as usize];
-            if (mn.check_index as usize) < query.len() {
+            let mut mn = heap.pop_first().unwrap();
+            let min_node = &self.trie.nodes[mn.id as usize];
+            if ((mn.check_index) as usize) < query.len() {
                 let mut map: HashMap<SSS, MatchingNode<UUU, SSS>> = Default::default();
-                let depth = mn_node.depth + 1..mn_node.depth + mn.ed + 1;
-                let char = qchars[(mn.check_index + 1) as usize];
+                let depth = min_node.depth + 1..=min_node.depth + mn.ed + 1;
+                let char = qchars[(mn.check_index) as usize];
+                debug_println!("traverse {:?} for {}", depth, char);
                 // CHECK-DESCENDANTS
                 for d in depth {
-                    self.traverse_inverted_index_node(mn_node, d as usize, char, |desc| {
-                        let ped = mn.ped + desc.depth - mn_node.depth - 1;
+                    self.traverse_inverted_index_node(min_node, d as usize, char, |desc| {
+                        let ped = mn.ped + desc.depth - min_node.depth - 1;
+                        let descid = desc.id() as SSS;
                         let new_mn = MatchingNode::<UUU, SSS>::new(
-                            desc.id() as SSS,
+                            descid,
                             mn.check_index + 1,
                             ped,
                             mn.check_index + 1,
                             ped,
                         );
-                        if !map.contains_key(&(desc.id() as SSS)) {
-                            map.insert(desc.id() as SSS, new_mn.clone());
-                            heap.push(new_mn);
+                        if ped as usize > max_threshold {
+                            return;
+                        }
+                        if !map.contains_key(&(descid)) {
+                            debug_println!("add mn, {:?}", &new_mn);
+                            map.insert(descid, new_mn.clone());
+                            heap.insert(new_mn);
                         } else {
-                            if new_mn.ed < map[&(desc.id() as SSS)].ed {}
+                            if new_mn.ed < map[&(descid)].ed {
+                                debug_println!("lower ed, {} -> {}", new_mn.ed, map[&(descid)].ed);
+                                heap.remove(&map[&(descid)]);
+                                heap.insert(new_mn);
+                            }
                         }
                     });
                 }
-                let mut mn2 = mn.clone();
-                mn2.check_index += 1;
-                mn2.ed += 1;
-                heap.push(mn2);
-                let minnode = heap.peek().unwrap().id;
-                let mnode = &self.trie.nodes[minnode as usize];
-                self.fill_results(mnode, &mut result, requested);
+                mn.check_index += 1;
+                mn.ed += 1;
+                heap.insert(mn);
+            } else {
+                debug_println!("fill with min node {:?}", min_node);
+                self.fill_results(min_node, &mut result, requested);
             }
         }
+        debug_println!("heap len {}", heap.len());
         format_result(result)
     }
 }
@@ -817,7 +827,7 @@ impl FromStrings for Yoke<MetaAutocompleter<'static>, Vec<String>> {
 }
 
 use derive_new::new;
-#[derive(PartialEq, Eq, new, Clone)]
+#[derive(PartialEq, Eq, new, Clone, Debug)]
 struct MatchingNode<UUU, SSS> {
     pub id: SSS,
     /// j, is the index of the matching character in q
@@ -825,6 +835,7 @@ struct MatchingNode<UUU, SSS> {
     /// ped is the matching prefix edit distance between q[1] and the prefix string represented by n
     pub ped: UUU,
     /// i, the index of the last character of q checked by n so far
+    /// next index to check in q actually in impl
     pub check_index: UUU,
     /// score is the edit distance between n and q[1,i].
     pub ed: UUU,
