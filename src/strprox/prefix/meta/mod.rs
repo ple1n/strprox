@@ -1,12 +1,12 @@
 use std::{
     borrow::Cow,
-    cmp::{max, min},
+    cmp::{max, min, Ordering},
     collections::{hash_map, HashMap, HashSet},
     marker::PhantomData,
     ops::Range,
 };
 
-use super::{MeasuredPrefix, FromStrings};
+use super::{FromStrings, MeasuredPrefix};
 use crate::{levenshtein, Autocompleter};
 
 use debug_print::debug_println;
@@ -435,24 +435,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         let mut active_matching_set = MatchingSet::<'stored, UUU, SSS>::new(&self.trie);
 
         let format_result = |result: HashSet<TreeString>| {
-            let mut result: Vec<MeasuredPrefix> = result
-                .into_iter()
-                .map(|string| MeasuredPrefix {
-                    string: string.to_string(),
-                    prefix_distance: levenshtein::prefix_edit_distance(
-                        query,
-                        TreeStringT::to_str(&string),
-                    ),
-                })
-
-                // it seems that META doesn't actually bound the full PED until near the end when
-                // query_prefix_len == query.len(), so a filter is necessary
-                .filter(|measure| measure.prefix_distance <= max_threshold)
-
-                .collect();
-
-            result.sort();
-            result
+            format_result(result, query, max_threshold)
         };
         for query_prefix_len in 1..=query_chars.len() {
             result.clear();
@@ -510,7 +493,11 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         // this may need to become public along with MatchingSet to support result caching for previous query prefixes
         let character = query[query_len - 1];
 
-        debug_println!("A {} Tau {}", active_matching_set.matchings.len(), threshold);
+        debug_println!(
+            "A {} Tau {}",
+            active_matching_set.matchings.len(),
+            threshold
+        );
 
         *active_matching_set = self.first_deducing(
             active_matching_set,
@@ -565,6 +552,18 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         VisitorFn: FnMut(&'stored Node<UUU, SSS>),
     {
         let node = matching.node;
+        self.traverse_inverted_index_node(node, depth, character, visitor)
+    }
+    /// Applies the `visitor` function to all descendants in the inverted index at `depth` and `character` of `matching.node`
+    fn traverse_inverted_index_node<VisitorFn>(
+        &'stored self,
+        node: &Node<UUU, SSS>,
+        depth: usize,
+        character: char,
+        mut visitor: VisitorFn,
+    ) where
+        VisitorFn: FnMut(&'stored Node<UUU, SSS>),
+    {
         if let Some(nodes) = self.inverted_index.get(depth, character) {
             // get the index where the first descendant of the node would be
             let start = nodes.partition_point(|&id| id < node.first_descendant_id() as SSS);
@@ -635,8 +634,8 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             // this condition appears to be for threshold-based autocomplete and not for top-k in META
             //if matching.deduced_prefix_edit_distance(query_len) <= threshold {
             new_active_matching_set.insert(matching); // i'' < i
-            // the first kind
-            //}
+                                                      // the first kind
+                                                      //}
         }
         new_active_matching_set
     }
@@ -766,4 +765,80 @@ impl FromStrings for Yoke<MetaAutocompleter<'static>, Vec<String>> {
             MetaAutocompleter::new(cows.len(), cows)
         })
     }
+}
+
+use derive_new::new;
+#[derive(PartialEq, Eq, new, Clone)]
+struct MatchingNode<UUU, SSS> {
+    pub id: SSS,
+    /// j, is the index of the matching character in q
+    pub match_index: UUU,
+    /// ped is the matching prefix edit distance between q[1] and the prefix string represented by n
+    pub ped: UUU,
+    /// i, the index of the last character of q checked by n so far
+    pub check_index: UUU,
+    /// score is the edit distance between n and q[1,i].
+    pub ed: UUU,
+}
+
+use std::fmt::Debug;
+
+impl<U: Debug + Eq + Ord, S: Debug + Eq + Ord> Ord for MatchingNode<U, S> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.ed.cmp(&other.ed) {
+            Ordering::Equal => other.check_index.cmp(&self.check_index),
+            k => k,
+        }
+    }
+}
+
+impl<U: PartialEq, S: PartialEq> PartialOrd for MatchingNode<U, S>
+where
+    Self: Ord,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[test]
+fn test_mn_ord() {
+    let node1 = MatchingNode::new(0, 0, 0, 0, 1);
+    let node2 = MatchingNode::new(0, 0, 0, 0, 2);
+    let node3 = MatchingNode::new(0, 0, 0, 1, 2);
+    assert!(node1 < node2);
+    assert!(node1 < node3);
+    assert!(node2 > node3)
+}
+
+impl MatchingNode<UUU, SSS> {
+    fn root<'stored>(trie: &'stored Trie<'stored, UUU, SSS>) -> Self {
+        Self {
+            id: trie.root().id() as SSS,
+            match_index: 0,
+            ped: 0,
+            check_index: 0,
+            ed: 0,
+        }
+    }
+}
+
+fn format_result(
+    result: HashSet<Cow<'_, str>>,
+    query: &str,
+    max_threshold: usize,
+) -> Vec<MeasuredPrefix> {
+    let mut result: Vec<MeasuredPrefix> = result
+        .into_iter()
+        .map(|string| MeasuredPrefix {
+            string: string.to_string(),
+            prefix_distance: levenshtein::prefix_edit_distance(query, TreeStringT::to_str(&string)),
+        })
+        // it seems that META doesn't actually bound the full PED until near the end when
+        // query_prefix_len == query.len(), so a filter is necessary
+        .filter(|measure| measure.prefix_distance <= max_threshold as usize)
+        .collect();
+
+    result.sort();
+    result
 }
