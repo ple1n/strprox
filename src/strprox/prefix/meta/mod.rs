@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cmp::{max, min, Ordering},
-    collections::{hash_map, HashMap, HashSet},
+    collections::{hash_map, HashMap, HashSet, BinaryHeap},
     marker::PhantomData,
     ops::Range,
 };
@@ -434,9 +434,8 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         let mut threshold = 0;
         let mut active_matching_set = MatchingSet::<'stored, UUU, SSS>::new(&self.trie);
 
-        let format_result = |result: HashSet<TreeString>| {
-            format_result(result, query, max_threshold)
-        };
+        let format_result =
+            |result: HashSet<TreeString>| format_result(result, query, max_threshold);
         for query_prefix_len in 1..=query_chars.len() {
             result.clear();
             threshold = self.autocomplete_step(
@@ -743,6 +742,56 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             appendix = new_appendix;
         }
         false
+    }
+
+    pub fn depth_autocomplete(
+        &'stored self,
+        query: &str,
+        requested: usize,
+        max_threshold: usize,
+    ) -> Vec<MeasuredPrefix> {
+        let mut heap = BinaryHeap::new();
+        let mut result: HashSet<TreeString<'stored>> = Default::default();
+        let qchars: Vec<_> = query.chars().collect();
+        heap.push(MatchingNode::<UUU, SSS>::root(&self.trie));
+        let format_result =
+            |result: HashSet<TreeString>| format_result(result, query, max_threshold);
+        while heap.len() > 0 && result.len() < requested {
+            let mn = heap.pop().unwrap();
+            let mn_node = &self.trie.nodes[mn.id as usize];
+            if (mn.check_index as usize) < query.len() {
+                let mut map: HashMap<SSS, MatchingNode<UUU, SSS>> = Default::default();
+                let depth = mn_node.depth + 1..mn_node.depth + mn.ed + 1;
+                let char = qchars[(mn.check_index + 1) as usize];
+                // CHECK-DESCENDANTS
+                for d in depth {
+                    self.traverse_inverted_index_node(mn_node, d as usize, char, |desc| {
+                        let ped = mn.ped + desc.depth - mn_node.depth - 1;
+                        let new_mn = MatchingNode::<UUU, SSS>::new(
+                            desc.id() as SSS,
+                            mn.check_index + 1,
+                            ped,
+                            mn.check_index + 1,
+                            ped,
+                        );
+                        if !map.contains_key(&(desc.id() as SSS)) {
+                            map.insert(desc.id() as SSS, new_mn.clone());
+                            heap.push(new_mn);
+                        } else {
+                            if new_mn.ed < map[&(desc.id() as SSS)].ed {}
+                        }
+                    });
+                }
+                let mut mn2 = mn.clone();
+                mn2.check_index += 1;
+                mn2.ed += 1;
+                heap.push(mn2);
+                let minnode = heap.peek().unwrap().id;
+                let mnode = &self.trie.nodes[minnode as usize];
+                self.fill_results(mnode, &mut result, requested);
+            }
+        }
+        format_result(result)
     }
 }
 
