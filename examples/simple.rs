@@ -7,7 +7,7 @@ fn test_depth(strs: &Vec<&str>) {
     let meta = MetaAutocompleter::new(cows.len(), cows);
     println!("Trie strings {}", meta.trie.strings.len());
     let start = Instant::now();
-    let v = meta.depth_autocomplete("farreachinglys", 1, 2);
+    let v = meta.depth_autocomplete("oange", 5, 2);
     dbg!(v);
     println!("took {} ms", start.elapsed().as_millis());
 }

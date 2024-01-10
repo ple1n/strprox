@@ -759,28 +759,26 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         while heap.len() > 0 && result.len() < requested {
             let mut mn = heap.pop_first().unwrap();
             let min_node = &self.trie.nodes[mn.id as usize];
-            if ((mn.check_index) as usize) < query.len() {
+            let fstr = &self.trie.strings[min_node.string_range.start as usize];
+            let prefix = &fstr[..min_node.depth as usize];
+
+            if ((mn.next_ix) as usize) < query.len() {
                 let mut map: HashMap<SSS, MatchingNode<UUU, SSS>> = Default::default();
                 let depth = min_node.depth + 1..=min_node.depth + mn.ed + 1;
-                let char = qchars[(mn.check_index) as usize];
-                debug_println!("traverse {:?} for {}", depth, char);
+                let char = qchars[(mn.next_ix) as usize];
+       
+                debug_println!("{} prefix {} -> traverse {:?} for {}", mn.id, prefix, depth, char);
                 // CHECK-DESCENDANTS
                 for d in depth {
                     self.traverse_inverted_index_node(min_node, d as usize, char, |desc| {
                         let ped = mn.ped + desc.depth - min_node.depth - 1;
                         let descid = desc.id() as SSS;
-                        let new_mn = MatchingNode::<UUU, SSS>::new(
-                            descid,
-                            mn.check_index + 1,
-                            ped,
-                            mn.check_index + 1,
-                            ped,
-                        );
-                        if ped as usize > max_threshold {
-                            return;
-                        }
+                        let new_mn =
+                            MatchingNode::<UUU, SSS>::new(descid, d, ped, mn.next_ix + 1, ped);
+                        // if ped as usize > max_threshold {
+                        //     return;
+                        // }
                         if !map.contains_key(&(descid)) {
-                            debug_println!("add mn, {:?}", &new_mn);
                             map.insert(descid, new_mn.clone());
                             heap.insert(new_mn);
                         } else {
@@ -792,12 +790,14 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                         }
                     });
                 }
-                mn.check_index += 1;
+                mn.next_ix += 1;
                 mn.ed += 1;
                 heap.insert(mn);
             } else {
-                debug_println!("fill with min node {:?}", min_node);
-                self.fill_results(min_node, &mut result, requested);
+                debug_println!("prefix {}, fill with min node", prefix);
+                self.fill_results(min_node, &mut result, 2);
+                println!("{:?}", &result);
+                result.clear();
             }
         }
         debug_println!("heap len {}", heap.len());
@@ -832,11 +832,11 @@ struct MatchingNode<UUU, SSS> {
     pub id: SSS,
     /// j, is the index of the matching character in q
     pub match_index: UUU,
-    /// ped is the matching prefix edit distance between q[1] and the prefix string represented by n
+    /// ped is the matching prefix edit distance between q and the prefix string represented by n
     pub ped: UUU,
     /// i, the index of the last character of q checked by n so far
-    /// next index to check in q actually in impl
-    pub check_index: UUU,
+    /// actually means next i in q[i] to check.
+    pub next_ix: UUU,
     /// score is the edit distance between n and q[1,i].
     pub ed: UUU,
 }
@@ -846,7 +846,7 @@ use std::fmt::Debug;
 impl<U: Debug + Eq + Ord, S: Debug + Eq + Ord> Ord for MatchingNode<U, S> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.ed.cmp(&other.ed) {
-            Ordering::Equal => other.check_index.cmp(&self.check_index),
+            Ordering::Equal => other.next_ix.cmp(&self.next_ix),
             k => k,
         }
     }
@@ -877,7 +877,7 @@ impl MatchingNode<UUU, SSS> {
             id: trie.root().id() as SSS,
             match_index: 0,
             ped: 0,
-            check_index: 0,
+            next_ix: 0,
             ed: 0,
         }
     }
