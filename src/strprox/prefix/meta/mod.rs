@@ -1,17 +1,21 @@
 use std::{
     borrow::Cow,
     cmp::{max, min},
-    collections::{hash_map, HashMap, HashSet},
+    collections::{btree_map::Entry, hash_map, BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
     marker::PhantomData,
     ops::Range,
+    sync::{Mutex, RwLock},
+    time::Instant,
 };
 
-use super::{MeasuredPrefix, FromStrings};
+use super::{FromStrings, MeasuredPrefix};
 use crate::{levenshtein, Autocompleter};
 
 use debug_print::debug_println;
+use polonius_the_crab::{polonius, polonius_return};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+use slab::Slab;
 use yoke::{Yoke, Yokeable};
 
 //mod compact_tree;
@@ -284,6 +288,8 @@ impl InvertedIndex<UUU, SSS> {
     }
 }
 
+use ptrie::Trie as PTrie;
+
 /// Structure that allows for autocompletion based on a string dataset
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Yokeable)]
@@ -291,6 +297,48 @@ pub struct MetaAutocompleter<'stored, UUU = u8, SSS = u32> {
     #[cfg_attr(feature = "serde", serde(borrow))]
     pub trie: Trie<'stored, UUU, SSS>,
     inverted_index: InvertedIndex<UUU, SSS>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    cached_prefix: PTrie<char, PState<'stored>>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    lru: CacheMap<'stored>,
+}
+
+pub struct PState<'s> {
+    /// vec index as key, b -> P(i,b) delta
+    sets: RwLock<Vec<MatchingSet<'s, UUU, SSS>>>,
+    /// last visit
+    prio: Mutex<Instant>,
+    ix: usize,
+}
+
+/// Reverse index
+#[derive(Default)]
+pub struct CacheMap<'s> {
+    slab: Slab<TreeString<'s>>,
+    /// Priority --> Set: prefix
+    /// Ascending, old to new
+    prio: BTreeMap<Instant, BTreeSet<usize>>,
+}
+
+impl<'s> CacheMap<'s> {
+    pub fn rm(&mut self, t: &Instant, k: &usize) -> bool {
+        if let Some(set) = self.prio.get_mut(t) {
+            set.remove(k);
+            true
+        } else {
+            false
+        }
+    }
+    pub fn add(&mut self, t: Instant, k: usize) {
+        match self.prio.entry(t) {
+            Entry::Occupied(mut oc) => {
+                oc.get_mut().insert(k);
+            }
+            Entry::Vacant(va) => {
+                va.insert([k].into());
+            }
+        }
+    }
 }
 
 impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
@@ -301,10 +349,70 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         Self {
             trie,
             inverted_index,
+            cached_prefix: Default::default(),
+            lru: Default::default(),
         }
     }
     pub fn len(&self) -> usize {
         self.trie.strings.len()
+    }
+    pub fn visit(&mut self, query: TreeString<'stored>) -> Vec<&PState<'stored>> {
+        let mut ptree = &mut self.cached_prefix;
+        let query: TreeString<'stored> = polonius!(|ptree| -> Vec<&'polonius PState<'stored>> {
+            let li = ptree.find_prefixes(query.chars());
+            // Invalidate 'em all
+            for PState { prio, sets: _, ix } in li.iter() {
+                let lock = prio.lock().unwrap();
+                self.lru.rm(&lock, ix);
+            }
+            if li.len() == query.len() {
+                let tip = li.last().unwrap();
+                let mut lock = tip.prio.lock().unwrap();
+                self.lru.rm(&lock, &tip.ix);
+                *lock = Instant::now();
+                polonius_return!(li)
+            }
+            query
+        });
+        ptree.insert(
+            query.chars(),
+            PState {
+                sets: Default::default(),
+                prio: Instant::now().into(),
+                ix: self.lru.slab.insert(query.to_owned()),
+            },
+        );
+        let li = ptree.find_prefixes(query.chars());
+        li
+    }
+    pub fn prune(&mut self) {
+        let max = 1000;
+        // oldest element ---- cutoff ----- newest element
+        let cutoff = *if self.lru.prio.len() < max {
+            return;
+        } else {
+            self.lru.prio.keys().nth_back(max).unwrap()
+        };
+        for (_k, set) in self.lru.prio.range(..cutoff).rev() {
+            // prune all the tail after each node, cuz every marker node after it must be older/smaller
+            for ix in set {
+                let prefix = &self.lru.slab[*ix];
+                self.cached_prefix.remove_subtree(prefix.chars())
+            }
+        }
+        self.lru.prio = self.lru.prio.split_off(&cutoff);
+    }
+    /// P(|q|,b)
+    pub fn assemble(&mut self, q: TreeString<'stored>, b: usize) {
+        let li = self.visit(q);
+        // ----|
+        //     |
+        for i in 0..li.len() {
+            let mut lk = li[i].sets.write().unwrap();
+            if lk.len() < 1 {
+                lk[0] = Default::default();
+            }
+        }
     }
 }
 
@@ -331,7 +439,7 @@ impl<'stored> Matching<'stored, UUU, SSS> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct MatchingSet<'stored, UUU, SSS> {
     /// Maps the first two parts of a matching to the edit distance
     pub matchings: HashMap<(UUU, &'stored Node<UUU, SSS>), UUU>,
@@ -444,11 +552,9 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                         TreeStringT::to_str(&string),
                     ),
                 })
-
                 // it seems that META doesn't actually bound the full PED until near the end when
                 // query_prefix_len == query.len(), so a filter is necessary
                 .filter(|measure| measure.prefix_distance <= max_threshold)
-
                 .collect();
 
             result.sort();
@@ -510,49 +616,54 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         // this may need to become public along with MatchingSet to support result caching for previous query prefixes
         let character = query[query_len - 1];
 
-        debug_println!("A {} Tau {}", active_matching_set.matchings.len(), threshold);
+        // debug_println!(
+        //     "A {} Tau {}",
+        //     active_matching_set.matchings.len(),
+        //     threshold
+        // );
 
-        *active_matching_set = self.first_deducing(
-            active_matching_set,
-            character,
-            query_len,
-            threshold.saturating_sub(1),
-        );
+        // *active_matching_set = self.first_deducing(
+        //     active_matching_set,
+        //     character,
+        //     query_len,
+        //     threshold.saturating_sub(1),
+        // );
 
-        for matching in active_matching_set.iter() {
-            let prefix_edit_distance = matching.deduced_prefix_edit_distance(query_len);
-            if prefix_edit_distance < threshold {
-                if self.fill_results(matching.node, result, requested) {
-                    return threshold;
-                }
-            }
-        }
+        // for matching in active_matching_set.iter() {
+        //     let prefix_edit_distance = matching.deduced_prefix_edit_distance(query_len);
+        //     if prefix_edit_distance < threshold {
+        //         if self.fill_results(matching.node, result, requested) {
+        //             return threshold;
+        //         }
+        //     }
+        // }
 
-        if self.second_deducing(
-            active_matching_set,
-            query,
-            query_len,
-            result,
-            threshold,
-            requested,
-        ) {
-            threshold
-        } else {
-            // don't bother looking for results with a higher PED
-            if threshold == max_threshold {
-                return threshold + 1;
-            }
-            let full = self.second_deducing(
-                active_matching_set,
-                query,
-                query_len,
-                result,
-                threshold + 1,
-                requested,
-            );
-            debug_assert!(full);
-            threshold + 1
-        }
+        // if self.second_deducing(
+        //     active_matching_set,
+        //     query,
+        //     query_len,
+        //     result,
+        //     threshold,
+        //     requested,
+        // ) {
+        //     threshold
+        // } else {
+        //     // don't bother looking for results with a higher PED
+        //     if threshold == max_threshold {
+        //         return threshold + 1;
+        //     }
+        //     let full = self.second_deducing(
+        //         active_matching_set,
+        //         query,
+        //         query_len,
+        //         result,
+        //         threshold + 1,
+        //         requested,
+        //     );
+        //     debug_assert!(full);
+        //     threshold + 1
+        // }
+        0
     }
     /// Applies the `visitor` function to all descendants in the inverted index at `depth` and `character` of `matching.node`
     fn traverse_inverted_index<VisitorFn>(
@@ -579,171 +690,128 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             }
         }
     }
-    /// Returns the next b-matching set for a query extended by one character
-    /// (loop step of MatchingBasedFramework from META without any removal from the matching set)
+    /// Extending the set from P(i-1,b) to P(i,b)
     fn first_deducing(
         &'stored self,
-        active_matching_set: &MatchingSet<'stored, UUU, SSS>,
+        set: &mut MatchingSet<'stored, UUU, SSS>,
         character: char,
-        query_len: usize,
-        threshold: usize,
-    ) -> MatchingSet<'stored, UUU, SSS> {
-        let mut best_edit_distances = HashMap::<SSS, UUU>::new();
-        for matching in active_matching_set.iter() {
-            let node = matching.node;
-            let node_prefix_len = node.depth as usize;
-            // lines 5-7 of MatchingBasedFramework, also used in SecondDeducing
-            for depth in node_prefix_len + 1
-                ..=min(
-                    node_prefix_len + threshold + 1,
-                    self.inverted_index.max_depth(),
-                )
+        query_len: usize, // i
+        b: usize,
+    ) {
+        let mut edit_distances = HashMap::<SSS, UUU>::new(); // Node ID to ED(q,n)
+        for m1 in set.iter() {
+            if m1.edit_distance <= b as UUU
+                && m1.query_prefix_len >= (query_len - 1 - b) as UUU
+                && m1.query_prefix_len <= (query_len - 1) as UUU
+            // m1.i >= i-1
             {
-                self.traverse_inverted_index(&matching, depth, character, |descendant| {
-                    // the depth of a node is equal to the length of its associated prefix
-                    let bound = matching.deduced_edit_distance(
-                        query_len - 1,
-                        node.depth.saturating_sub(1) as usize,
-                    );
-                    let bound = bound as UUU;
-                    let id = descendant.id() as SSS;
-                    if bound <= threshold as UUU {
-                        if let Some(edit_distance) = best_edit_distances.get_mut(&id) {
-                            *edit_distance = min(*edit_distance, bound);
-                        } else {
-                            best_edit_distances.insert(id, bound);
-                        }
+                let m1_node = m1.node;
+                let m1_depth = m1_node.depth as usize;
+                for depth in m1_depth + 1..=min(m1_depth + b + 1, self.inverted_index.max_depth()) {
+                    // theorem ed-delta
+                    if query_len.abs_diff(depth) <= b {
+                        self.traverse_inverted_index(&m1, depth, character, |descendant| {
+                            // the depth of a node is equal to the length of its associated prefix
+                            let ded = m1.deduced_edit_distance(
+                                query_len - 1,
+                                depth.saturating_sub(1) as usize,
+                            );
+                            let ded = ded as UUU;
+                            let n2 = descendant.id() as SSS;
+                            if ded <= b as UUU {
+                                if let Some(edit_distance) = edit_distances.get_mut(&n2) {
+                                    *edit_distance = min(*edit_distance, ded);
+                                } else {
+                                    edit_distances.insert(n2, ded);
+                                }
+                            }
+                        });
                     }
-                });
+                }
             }
         }
-        let mut new_active_matching_set = MatchingSet::<'stored, UUU, SSS>::default();
-        // lines 8-9
-        for (node_id, edit_distance) in best_edit_distances {
+        for (node_id, edit_distance) in edit_distances {
             let query_prefix_len = query_len as UUU;
             let node = &self.trie.nodes[node_id as usize];
             let matching = Matching::<'stored, UUU, SSS> {
-                query_prefix_len, // i'' = i
+                query_prefix_len,
                 node,
                 edit_distance,
             };
-            // the second kind
-            new_active_matching_set.insert(matching);
+            set.insert(matching);
         }
-        // lines 10-11
-        for matching in active_matching_set.iter() {
-            // this condition appears to be for threshold-based autocomplete and not for top-k in META
-            //if matching.deduced_prefix_edit_distance(query_len) <= threshold {
-            new_active_matching_set.insert(matching); // i'' < i
-            // the first kind
-            //}
-        }
-        new_active_matching_set
     }
-    /// Implements SecondDeducing from META
-    ///
-    /// Returns whether `result` was filled to `requested`
+    /// Expand the set from P(i,b-1) to P(i,b).
+    /// Returns the delta, ie. P4
     fn second_deducing(
         &'stored self,
-        active_matching_set: &mut MatchingSet<'stored, UUU, SSS>,
+        set: &MatchingSet<'stored, UUU, SSS>,
         query: &[char],
         query_len: usize,
-        result: &mut HashSet<TreeString<'stored>>,
-        threshold: usize,
-        requested: usize,
-    ) -> bool {
-        type Appendix<'stored> = Vec<Matching<'stored, UUU, SSS>>;
-        // need to specify `active_matching_set` as a parameter to have compatible borrow lifetimes with mut and immutable uses
-        let mut per_matching = |active_matching_set: &MatchingSet<'stored, UUU, SSS>,
-                                matching: Matching<'stored, UUU, SSS>,
-                                appendix: &mut Appendix<'stored>| {
-            let max_ped = matching.deduced_prefix_edit_distance(query_len) as UUU;
-            // lines 2-4 of SecondDeducing
-            if max_ped == threshold as UUU {
-                if self.fill_results(matching.node, result, requested) {
-                    return true;
-                }
-            }
-
+        b: usize,
+    ) -> MatchingSet<'stored, UUU, SSS> {
+        let mut set_p4: MatchingSet<'stored, UUU, SSS> = Default::default();
+        let mut per_matching = |matching: Matching<'stored, UUU, SSS>| {
             let last_depth = min(
-                matching.node.depth as usize + threshold - matching.edit_distance as usize + 1,
+                matching.node.depth as usize + b - matching.edit_distance as usize + 1,
                 self.inverted_index.max_depth(),
             );
             let last_query_prefix_len = min(
-                matching.query_prefix_len as usize + threshold - matching.edit_distance as usize
-                    + 1,
+                matching.query_prefix_len as usize + b - matching.edit_distance as usize + 1, // k+1+i_1
                 query_len,
             );
 
-            // line 5
-            let mut append = |descendant: &'stored Node<UUU, SSS>, query_prefix_len: usize| {
-                if !active_matching_set.contains(query_prefix_len as UUU, descendant)
+            let mut check = |descendant: &'stored Node<UUU, SSS>, query_prefix_len: usize| {
+                // m not in P_2 for any ed
+                if !set.contains(query_prefix_len as UUU, descendant)
                     && matching
                         .deduced_edit_distance(query_prefix_len - 1, descendant.depth as usize - 1)
-                        == threshold
+                        == b
                 {
                     let matching = Matching::<'stored, UUU, SSS> {
                         query_prefix_len: query_prefix_len as UUU,
                         node: descendant,
-                        edit_distance: threshold as UUU,
+                        edit_distance: b as UUU,
                     };
-                    appendix.push(matching);
+                    set_p4.insert(matching);
                 }
             };
-            for query_prefix_len in matching.query_prefix_len as usize + 1..=last_query_prefix_len {
+
+            for query_prefix_len in matching.query_prefix_len as usize + 1..last_query_prefix_len {
                 let character = query[query_prefix_len - 1];
-                self.traverse_inverted_index(&matching, last_depth, character, |descendant| {
-                    append(descendant, query_prefix_len)
-                });
+                // theorem ed-delta
+                if query_prefix_len.abs_diff(last_depth) <= b {
+                    self.traverse_inverted_index(&matching, last_depth, character, |descendant| {
+                        check(descendant, query_prefix_len)
+                    });
+                }
             }
 
-            let last_character = query[last_query_prefix_len - 1];
-            for depth in matching.node.depth as usize + 1..=last_depth {
-                self.traverse_inverted_index(&matching, depth, last_character, |descendant| {
-                    append(descendant, last_query_prefix_len)
-                });
+            let last_character = query[last_query_prefix_len - 1]; // the index in paper starts from one.
+            for depth in matching.node.depth as usize + 1..last_depth {
+                if last_query_prefix_len.abs_diff(depth) <= b {
+                    self.traverse_inverted_index(&matching, depth, last_character, |descendant| {
+                        check(descendant, last_query_prefix_len)
+                    });
+                }
             }
 
-            false
+            self.traverse_inverted_index(
+                &matching,
+                last_query_prefix_len,
+                last_character,
+                |descendant| check(descendant, last_query_prefix_len),
+            );
         };
 
-        // Can't simultaneously insert into the matching set while iterating through it
-        let mut appendix = Vec::<Matching<'stored, UUU, SSS>>::new();
-        for matching in active_matching_set.iter() {
-            if per_matching(active_matching_set, matching, &mut appendix) {
-                return true;
+        // Filter the input set to P(i,b-1)
+        for m in set.iter() {
+            if m.edit_distance <= b as UUU - 1 && m.query_prefix_len <= query_len as UUU {
+                per_matching(m);
             }
         }
-        while !appendix.is_empty() {
-            // Is it possible that this would append anything after the first loop earlier?
-            // Not sure if appending more matchings is necessary
-            let mut new_appendix = Vec::<Matching<'stored, UUU, SSS>>::new();
-            let mut full = false;
-            let mut into_appendix = appendix.into_iter();
-            // process everything in appendix
-            while let Some(matching) = into_appendix.next() {
-                if per_matching(active_matching_set, matching.clone(), &mut new_appendix) {
-                    full = true;
-                }
-                active_matching_set.insert(matching);
-                if full {
-                    break;
-                }
-            }
-            // add everything from appendix (the algorithm as written seems to insert a matching immediately from the earlier loop)
-            for matching in into_appendix {
-                active_matching_set.insert(matching);
-            }
-            if full {
-                for matching in new_appendix {
-                    active_matching_set.insert(matching);
-                }
-                return true;
-            }
-            // new_appendix is moved to appendix for further processing
-            appendix = new_appendix;
-        }
-        false
+
+        set_p4
     }
 }
 

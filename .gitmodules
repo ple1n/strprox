@@ -1,0 +1,3 @@
+[submodule "ptrie"]
+	path = ptrie
+	url = https://github.com/planetoryd/ptrie

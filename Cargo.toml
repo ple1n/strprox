@@ -20,6 +20,9 @@ debug_print = "1.0.0"
 serde = { version = "1.0", optional = true, features = ["derive"] }
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
+ptrie = { path = "./ptrie" }
+slab = "0.4.9"
+polonius-the-crab = "0.4.1"
 
 [features]
 serde = ["dep:serde"]
