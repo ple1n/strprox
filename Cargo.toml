@@ -23,6 +23,7 @@ js-sys = { version = "0.3", optional = true }
 ptrie = { path = "./ptrie" }
 slab = "0.4.9"
 polonius-the-crab = "0.4.1"
+derive-new = "0.6.0"
 
 [features]
 serde = ["dep:serde"]
