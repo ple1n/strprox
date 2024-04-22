@@ -1,5 +1,5 @@
 use std::{
-    borrow::Cow,
+    borrow::{Borrow, Cow},
     cmp::{max, min},
     collections::{btree_map::Entry, hash_map, BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
     marker::PhantomData,
@@ -31,7 +31,7 @@ type UUU = u8;
 type SSS = u32;
 
 /// A trie node with a similar structure from META
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Node<UUU, SSS> {
     /// One Unicode character
@@ -100,6 +100,11 @@ impl<'stored> Trie<'stored, UUU, SSS> {
     fn root(&self) -> &Node<UUU, SSS> {
         // this shouldn't be able to panic from the public API
         self.nodes.first().unwrap()
+    }
+    fn fill_results(&self, node: &Node<UUU, SSS>, result: &mut HashSet<TreeString<'stored>>) {
+        for string_index in node.string_range.clone() {
+            result.insert(self.strings[string_index as usize].clone());
+        }
     }
     /// Returns trie over `source` (expects `source` to have at most usize::MAX - 1 strings)
     pub fn new(len: usize, source: impl IntoIterator<Item = TreeString<'stored>>) -> Self {
@@ -299,20 +304,17 @@ pub struct MetaAutocompleter<'stored, UUU = u8, SSS = u32> {
     inverted_index: InvertedIndex<UUU, SSS>,
 }
 
+#[derive(Default)]
 /// Separate this it out entirely to avoid lifetime conflicts
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Cache<'stored> {
-    cached_prefix: PTrie<char, PState<'stored>>,
+    cached_prefix: PTrie<char, PState>,
     lru: CacheMap<'stored>,
 }
 
 impl<'x> Cache<'x> {
-    pub fn visit<'t>(
-        &'t mut self,
-        query: TreeString<'x>,
-    ) -> Vec<(usize, &'t PState<'x>)> {
+    pub fn visit<'t, 'q>(&'t mut self, query: TreeString<'q>) -> Vec<(usize, &'t PState)> {
         let mut ptree = &mut self.cached_prefix;
-        let query: TreeString<'x> = polonius!(|ptree| -> Vec<(usize, &'polonius PState<'x>)> {
+        let query: TreeString<'q> = polonius!(|ptree| -> Vec<(usize, &'polonius PState)> {
             let li = ptree.find_prefixes(query.chars());
             // Invalidate 'em all
             for (i, PState { prio, sets: _, ix }) in li.iter() {
@@ -333,7 +335,10 @@ impl<'x> Cache<'x> {
             PState {
                 sets: Default::default(),
                 prio: Instant::now().into(),
-                ix: self.lru.slab.insert(query.to_owned()),
+                ix: self
+                    .lru
+                    .slab
+                    .insert(TreeStringT::from_owned(query.to_string())),
             },
         );
         let li = ptree.find_prefixes(query.chars());
@@ -341,9 +346,9 @@ impl<'x> Cache<'x> {
     }
 }
 
-pub struct PState<'s> {
+pub struct PState {
     /// vec index as key, b -> P(i,b) delta
-    sets: Vec<MatchingSet<'s, UUU, SSS>>,
+    sets: Vec<MatchingSet<UUU>>,
     /// last visit
     prio: Mutex<Instant>,
     ix: usize,
@@ -411,12 +416,12 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         cache.lru.prio = cache.lru.prio.split_off(&cutoff);
     }
     /// P(|q|,b)
-    pub fn assemble(
-        &'stored mut self,
-        q: TreeString<'stored>,
+    pub fn assemble<'q>(
+        &self,
+        q: TreeString<'q>,
         b: usize,
-        cache: &'stored mut Cache<'stored>,
-    ) -> MatchingSet<'_, UUU, SSS> {
+        cache: &mut Cache<'_>,
+    ) -> MatchingSet<UUU> {
         let query_chars: Vec<char> = q.chars().collect();
         // ----|
         //     |
@@ -450,11 +455,10 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         drop(acc);
 
         let li = cache.visit(q.clone());
-        let row1: HashMap<(UUU, &'stored Node<UUU, SSS>), UUU> =
-            li.iter().fold(HashMap::new(), |mut a, (i, n)| {
-                a.extend(n.sets[0].matchings.iter());
-                a
-            });
+        let row1: HashMap<(UUU, NodeID), UUU> = li.iter().fold(HashMap::new(), |mut a, (i, n)| {
+            a.extend(n.sets[0].matchings.iter());
+            a
+        });
         let mut row1 = MatchingSet::new(row1);
         // P(|q|,1)
 
@@ -472,21 +476,29 @@ fn try_range() {
     println!("{:?}", (2..=2).into_iter().collect::<Vec<_>>());
 }
 
-#[derive(Clone)]
-struct Matching<'stored, UUU, SSS> {
+#[derive(Clone, Copy)]
+struct Matching<UUU>
+where
+    UUU: Clone,
+{
     query_prefix_len: UUU,
-    node: &'stored Node<UUU, SSS>,
+    node: NodeID,
     edit_distance: UUU,
 }
 
-impl<'stored> Matching<'stored, UUU, SSS> {
+impl<'stored> Matching<UUU> {
     /// Returns an upper bound on the edit distance between the query and a prefix of length `stored_len` that intersects
     /// with the matching node's prefix
-    fn deduced_edit_distance(&self, query_len: usize, stored_len: usize) -> usize {
+    fn deduced_edit_distance(
+        &self,
+        query_len: usize,
+        stored_len: usize,
+        nodes: &TrieNodes<UUU, SSS>,
+    ) -> usize {
         self.edit_distance as usize
             + max(
                 query_len.saturating_sub(self.query_prefix_len as usize),
-                stored_len.saturating_sub(self.node.depth as usize),
+                stored_len.saturating_sub(nodes[self.node].depth as usize),
             )
     }
     /// Returns an upper bound on the edit distance between the query and the matching node's prefix
@@ -497,48 +509,56 @@ impl<'stored> Matching<'stored, UUU, SSS> {
 
 use derive_new::new;
 
+type NodeID = usize;
+
 #[derive(Debug, Default, Clone, new)]
-pub struct MatchingSet<'stored, UUU, SSS> {
+pub struct MatchingSet<UUU>
+where
+    UUU: Clone,
+{
     /// Maps the first two parts of a matching to the edit distance
-    pub matchings: HashMap<(UUU, &'stored Node<UUU, SSS>), UUU>,
+    pub matchings: HashMap<(UUU, NodeID), UUU>,
 }
 
-impl<'a> MatchingSet<'a, UUU, SSS> {
+impl MatchingSet<UUU> {
     /// Inserts `matching` into the MatchingSet
-    fn insert(&mut self, matching: Matching<'a, UUU, SSS>) {
+    fn insert(&mut self, matching: Matching<UUU>) {
         self.matchings.insert(
             (matching.query_prefix_len, matching.node),
             matching.edit_distance,
         );
     }
     /// Returns an iterator over the matchings
-    fn iter(&self) -> MatchingSetIter<'_, 'a, UUU, SSS> {
+    fn iter<'u>(&'u self) -> MatchingSetIter<'u, UUU> {
         MatchingSetIter {
             iter: self.matchings.iter(),
         }
     }
     /// Returns whether there is a matching for `query_prefix_len` and `node`
-    fn contains(&self, query_prefix_len: UUU, node: &'a Node<UUU, SSS>) -> bool {
+    fn contains(&self, query_prefix_len: UUU, node: NodeID) -> bool {
         self.matchings.contains_key(&(query_prefix_len, node))
     }
     /// Returns a matching set with a matching for the root of the `trie` and an empty query
-    fn new_trie<'b: 'a>(trie: &'a Trie<'b, UUU, SSS>) -> Self {
-        let mut matchings = HashMap::<(UUU, &'a Node<UUU, SSS>), UUU>::new();
+    fn new_trie(trie: &Trie<'_, UUU, SSS>) -> Self {
+        let mut matchings = HashMap::<(UUU, NodeID), UUU>::new();
         let query_prefix_len = 0;
         let node = trie.root();
         let edit_distance = 0;
-        matchings.insert((query_prefix_len, node), edit_distance);
+        matchings.insert((query_prefix_len, trie.root().id()), edit_distance);
         Self { matchings }
     }
 }
 
 /// Iterator over the matchings in a MatchingSet
-struct MatchingSetIter<'iter, 'stored, UUU, SSS> {
-    iter: hash_map::Iter<'iter, (UUU, &'stored Node<UUU, SSS>), UUU>,
+struct MatchingSetIter<'iter, UUU>
+where
+    UUU: Clone,
+{
+    iter: hash_map::Iter<'iter, (UUU, usize), UUU>,
 }
 
-impl<'stored> Iterator for MatchingSetIter<'_, 'stored, UUU, SSS> {
-    type Item = Matching<'stored, UUU, SSS>;
+impl<'user> Iterator for MatchingSetIter<'user, UUU> {
+    type Item = Matching<UUU>;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some((&(query_prefix_len, node), &edit_distance)) = self.iter.next() {
             Some(Matching {
@@ -558,87 +578,23 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     /// or all strings available if `requested` is larger than the number stored
     ///
     /// Assumes `query`'s length in Unicode characters is bounded by UUU; will truncate to UUU::MAX characters otherwise
-    pub fn autocomplete(&'stored self, query: &str, requested: usize) -> Vec<MeasuredPrefix> {
-        self.threshold_topk(query, requested, usize::MAX)
-    }
-    /// Returns the top `requested` number of strings with the best prefix distance from the query
-    /// sorted by prefix edit distance and then lexicographical order,
-    /// or all strings available if `requested` is larger than the number stored
-    ///
-    /// Assumes `query`'s length in Unicode characters is bounded by UUU; will truncate to UUU::MAX characters otherwise
-    pub fn threshold_topk(
-        &'stored self,
+    pub fn autocomplete(
+        &'_ self,
         query: &str,
-        requested: usize,
-        max_threshold: usize,
+        cache: &mut Cache<'_>,
     ) -> Vec<MeasuredPrefix> {
-        if requested == 0 {
-            return Default::default();
+        let set = self.assemble(query.into(), 1, cache);
+        let mut strs = Default::default();
+        for m in set.iter() {
+            self.trie.fill_results(&self.trie.nodes[m.node], &mut strs);
         }
-
-        // Return the first `requested` strings or as many as possible, and 0 as the PED (because the best prefix is empty)
-        if query.is_empty() {
-            let strings = &self.trie.strings;
-            let string_range = 0..min(requested, strings.len());
-            return string_range
-                .map(|index| {
-                    let string = strings[index].to_string();
-                    MeasuredPrefix {
-                        string,
-                        prefix_distance: 0,
-                    }
-                })
-                .collect();
-        }
-
-        let mut query_chars: Vec<char> = query.chars().collect();
-        if query_chars.len() > UUU::MAX as usize {
-            query_chars.truncate(UUU::MAX as usize);
-        }
-
-        let mut result = HashSet::<TreeString<'stored>>::new();
-        let mut threshold = 0;
-        let mut active_matching_set = MatchingSet::<'stored, UUU, SSS>::new_trie(&self.trie);
-
-        let format_result = |result: HashSet<TreeString>| {
-            let mut result: Vec<MeasuredPrefix> = result
-                .into_iter()
-                .map(|string| MeasuredPrefix {
-                    string: string.to_string(),
-                    prefix_distance: levenshtein::prefix_edit_distance(
-                        query,
-                        TreeStringT::to_str(&string),
-                    ),
-                })
-                // it seems that META doesn't actually bound the full PED until near the end when
-                // query_prefix_len == query.len(), so a filter is necessary
-                .filter(|measure| measure.prefix_distance <= max_threshold)
-                .collect();
-
-            result.sort();
-            result
-        };
-        for query_prefix_len in 1..=query_chars.len() {
-            result.clear();
-            threshold = self.autocomplete_step(
-                &mut active_matching_set,
-                &query_chars,
-                query_prefix_len,
-                threshold,
-                max_threshold,
-                requested,
-                &mut result,
-            );
-            if threshold > max_threshold {
-                return format_result(result);
-            }
-        }
-        format_result(result)
+        measure_results(strs, query)
     }
+
     /// Adds the strings prefixed by `node` to `result` until all have been added or the `requested` size has been reached
     ///
     /// Returns whether the `requested` size has been reached
-    fn fill_results(
+    fn fill_results_limit(
         &self,
         node: &Node<UUU, SSS>,
         result: &mut HashSet<TreeString<'stored>>,
@@ -658,82 +614,17 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         debug_assert_ne!(result.len(), requested);
         false
     }
-    /// Performs a single step of autocomplete for one character of a query
-    ///
-    /// Returns the new `threshold` for the maximum prefix edit distance in the result set
-    fn autocomplete_step(
-        &'stored self,
-        active_matching_set: &mut MatchingSet<'stored, UUU, SSS>,
-        query: &[char],
-        query_len: usize,
-        threshold: usize,
-        max_threshold: usize,
-        requested: usize,
-        result: &mut HashSet<TreeString<'stored>>,
-    ) -> usize {
-        // this may need to become public along with MatchingSet to support result caching for previous query prefixes
-        let character = query[query_len - 1];
-
-        // debug_println!(
-        //     "A {} Tau {}",
-        //     active_matching_set.matchings.len(),
-        //     threshold
-        // );
-
-        // *active_matching_set = self.first_deducing(
-        //     active_matching_set,
-        //     character,
-        //     query_len,
-        //     threshold.saturating_sub(1),
-        // );
-
-        // for matching in active_matching_set.iter() {
-        //     let prefix_edit_distance = matching.deduced_prefix_edit_distance(query_len);
-        //     if prefix_edit_distance < threshold {
-        //         if self.fill_results(matching.node, result, requested) {
-        //             return threshold;
-        //         }
-        //     }
-        // }
-
-        // if self.second_deducing(
-        //     active_matching_set,
-        //     query,
-        //     query_len,
-        //     result,
-        //     threshold,
-        //     requested,
-        // ) {
-        //     threshold
-        // } else {
-        //     // don't bother looking for results with a higher PED
-        //     if threshold == max_threshold {
-        //         return threshold + 1;
-        //     }
-        //     let full = self.second_deducing(
-        //         active_matching_set,
-        //         query,
-        //         query_len,
-        //         result,
-        //         threshold + 1,
-        //         requested,
-        //     );
-        //     debug_assert!(full);
-        //     threshold + 1
-        // }
-        0
-    }
     /// Applies the `visitor` function to all descendants in the inverted index at `depth` and `character` of `matching.node`
-    fn traverse_inverted_index<VisitorFn>(
-        &'stored self,
-        matching: &Matching<'stored, UUU, SSS>,
+    fn traverse_inverted_index<'a, VisitorFn>(
+        &'a self,
+        matching: Matching<UUU>,
         depth: usize,
         character: char,
         mut visitor: VisitorFn,
     ) where
-        VisitorFn: FnMut(&'stored Node<UUU, SSS>),
+        VisitorFn: FnMut(NodeID, &'a Node<UUU, SSS>),
     {
-        let node = matching.node;
+        let node = &self.trie.nodes[matching.node];
         if let Some(nodes) = self.inverted_index.get(depth, character) {
             // get the index where the first descendant of the node would be
             let start = nodes.partition_point(|&id| id < node.first_descendant_id() as SSS);
@@ -744,55 +635,64 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             let descendant_ids = &nodes[start..end];
 
             for &descendant_id in descendant_ids {
-                visitor(&self.trie.nodes[descendant_id as usize]);
+                visitor(
+                    descendant_id.try_into().unwrap(),
+                    &self.trie.nodes[descendant_id as usize],
+                );
             }
         }
     }
     /// Extending the set from P(i-1,b) to P(i,b)
-    fn first_deducing<'a>(
-        &'a self,
-        set: &MatchingSet<'stored, UUU, SSS>,
+    fn first_deducing<'c>(
+        &'c self,
+        set: &MatchingSet<UUU>,
         character: char,
         query_len: usize, // i
         b: usize,
-    ) -> MatchingSet<'a, u8, u32> {
+    ) -> MatchingSet<u8> {
         let mut delta = MatchingSet::default();
-        let mut edit_distances = HashMap::<SSS, UUU>::new(); // Node ID to ED(q,n)
+        let mut edit_distances = HashMap::<usize, UUU>::new(); // Node ID to ED(q,n)
         for m1 in set.iter() {
             if m1.edit_distance <= b as UUU
                 && m1.query_prefix_len >= (query_len - 1 - b) as UUU
                 && m1.query_prefix_len <= (query_len - 1) as UUU
             // m1.i >= i-1
             {
-                let m1_node = m1.node;
+                let m1_node = &self.trie.nodes[m1.node];
                 let m1_depth = m1_node.depth as usize;
                 for depth in m1_depth + 1..=min(m1_depth + b + 1, self.inverted_index.max_depth()) {
                     // theorem ed-delta
                     if query_len.abs_diff(depth) <= b {
-                        self.traverse_inverted_index(&m1, depth, character, |descendant| {
-                            // the depth of a node is equal to the length of its associated prefix
-                            let ded = m1.deduced_edit_distance(
-                                query_len - 1,
-                                depth.saturating_sub(1) as usize,
-                            );
-                            let ded = ded as UUU;
-                            let n2 = descendant.id() as SSS;
-                            if ded <= b as UUU {
-                                if let Some(edit_distance) = edit_distances.get_mut(&n2) {
-                                    *edit_distance = min(*edit_distance, ded);
-                                } else {
-                                    edit_distances.insert(n2, ded);
+                        self.traverse_inverted_index(
+                            m1.clone(),
+                            depth,
+                            character,
+                            |id, descendant| {
+                                // the depth of a node is equal to the length of its associated prefix
+                                let ded = m1.deduced_edit_distance(
+                                    query_len - 1,
+                                    depth.saturating_sub(1) as usize,
+                                    &self.trie.nodes,
+                                );
+                                let ded = ded as UUU;
+                                let n2 = descendant.id();
+                                if ded <= b as UUU {
+                                    if let Some(edit_distance) = edit_distances.get_mut(&n2) {
+                                        *edit_distance = min(*edit_distance, ded);
+                                    } else {
+                                        edit_distances.insert(n2, ded);
+                                    }
                                 }
-                            }
-                        });
+                            },
+                        );
                     }
                 }
             }
         }
         for (node_id, edit_distance) in edit_distances {
             let query_prefix_len = query_len as UUU;
-            let node = &self.trie.nodes[node_id as usize];
-            let matching = Matching::<'a, UUU, SSS> {
+            let node = node_id;
+            let matching = Matching::<UUU> {
                 query_prefix_len,
                 node,
                 edit_distance,
@@ -803,17 +703,21 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     }
     /// Expand the set from P(i,b-1) to P(i,b).
     /// Returns the delta, ie. P4
-    fn second_deducing(
-        &'stored self,
-        set: &MatchingSet<'stored, UUU, SSS>,
+    fn second_deducing<'a, 'b: 'a>(
+        &'a self,
+        set: &'a MatchingSet<UUU>,
         query: &[char],
         query_len: usize,
         b: usize,
-    ) -> MatchingSet<'stored, UUU, SSS> {
-        let mut set_p4: MatchingSet<'stored, UUU, SSS> = Default::default();
-        let mut per_matching = |matching: Matching<'stored, UUU, SSS>| {
+    ) -> MatchingSet<UUU>
+    where
+        'stored: 'b,
+    {
+        let mut set_p4: MatchingSet<UUU> = Default::default();
+        let mut per_matching = |matching: Matching<UUU>| -> () {
             let last_depth = min(
-                matching.node.depth as usize + b - matching.edit_distance as usize + 1,
+                self.trie.nodes[matching.node].depth as usize + b - matching.edit_distance as usize
+                    + 1,
                 self.inverted_index.max_depth(),
             );
             let last_query_prefix_len = min(
@@ -821,46 +725,55 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 query_len,
             );
 
-            let mut check = |descendant: &'stored Node<UUU, SSS>, query_prefix_len: usize| {
-                // m not in P_2 for any ed
-                if !set.contains(query_prefix_len as UUU, descendant)
-                    && matching
-                        .deduced_edit_distance(query_prefix_len - 1, descendant.depth as usize - 1)
-                        == b
-                {
-                    let matching = Matching::<'stored, UUU, SSS> {
-                        query_prefix_len: query_prefix_len as UUU,
-                        node: descendant,
-                        edit_distance: b as UUU,
-                    };
-                    set_p4.insert(matching);
-                }
-            };
+            let mut check =
+                |node: NodeID, descendant: &Node<UUU, SSS>, query_prefix_len: usize| -> () {
+                    // m not in P_2 for any ed
+                    if !set.contains(query_prefix_len as UUU, node)
+                        && matching.deduced_edit_distance(
+                            query_prefix_len - 1,
+                            descendant.depth as usize - 1,
+                            &self.trie.nodes,
+                        ) == b
+                    {
+                        let matching = Matching::<UUU> {
+                            query_prefix_len: query_prefix_len as UUU,
+                            node,
+                            edit_distance: b as UUU,
+                        };
+                        set_p4.insert(matching);
+                    }
+                };
 
             for query_prefix_len in matching.query_prefix_len as usize + 1..last_query_prefix_len {
                 let character = query[query_prefix_len - 1];
                 // theorem ed-delta
                 if query_prefix_len.abs_diff(last_depth) <= b {
-                    self.traverse_inverted_index(&matching, last_depth, character, |descendant| {
-                        check(descendant, query_prefix_len)
-                    });
+                    self.traverse_inverted_index(
+                        matching.clone(),
+                        last_depth,
+                        character,
+                        |id, descendant| check(id, descendant, query_prefix_len),
+                    );
                 }
             }
 
             let last_character = query[last_query_prefix_len - 1]; // the index in paper starts from one.
-            for depth in matching.node.depth as usize + 1..last_depth {
+            for depth in self.trie.nodes[matching.node].depth as usize + 1..last_depth {
                 if last_query_prefix_len.abs_diff(depth) <= b {
-                    self.traverse_inverted_index(&matching, depth, last_character, |descendant| {
-                        check(descendant, last_query_prefix_len)
-                    });
+                    self.traverse_inverted_index(
+                        matching.clone(),
+                        depth,
+                        last_character,
+                        |id, descendant| check(id, descendant, last_query_prefix_len),
+                    );
                 }
             }
 
             self.traverse_inverted_index(
-                &matching,
+                matching.clone(),
                 last_query_prefix_len,
                 last_character,
-                |descendant| check(descendant, last_query_prefix_len),
+                |id, descendant| check(id, descendant, last_query_prefix_len),
             );
         };
 
@@ -875,6 +788,19 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     }
 }
 
+fn measure_results(result: HashSet<Cow<'_, str>>, query: &str) -> Vec<MeasuredPrefix> {
+    let mut result: Vec<MeasuredPrefix> = result
+        .into_iter()
+        .map(|string| MeasuredPrefix {
+            string: string.to_string(),
+            prefix_distance: levenshtein::prefix_edit_distance(query, TreeStringT::to_str(&string)),
+        })
+        .collect();
+
+    result.sort();
+    result
+}
+
 impl Autocompleter for Yoke<MetaAutocompleter<'static>, Vec<String>> {
     fn threshold_topk(
         &self,
@@ -882,7 +808,7 @@ impl Autocompleter for Yoke<MetaAutocompleter<'static>, Vec<String>> {
         requested: usize,
         max_threshold: usize,
     ) -> Vec<MeasuredPrefix> {
-        self.get().threshold_topk(query, requested, max_threshold)
+        unimplemented!()
     }
 }
 

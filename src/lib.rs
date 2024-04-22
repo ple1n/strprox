@@ -1,3 +1,4 @@
+#![feature(closure_lifetime_binder)]
 pub mod strprox;
 
 #[doc(inline)]
