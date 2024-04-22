@@ -436,7 +436,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     pub fn assemble<'q>(
         &self,
         q: TreeString<'q>,
-        b: usize,
+        req_matchings: usize,
         cache: &mut Cache<'_>,
     ) -> MatchingSet<UUU> {
         let query_chars: Vec<char> = q.chars().collect();
@@ -449,17 +449,23 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 acc.matchings.extend(k.matchings.iter())
             } else {
                 println!("|{}| 1st-deduce set len={}", ix, acc.matchings.len());
-                let set = self.first_deducing(&acc, query_chars[ix], ix + 1, 0);
-                acc.matchings.extend(set.matchings.iter());
-                ps.sets = vec![set];
+                let delta = self.first_deducing(&acc, query_chars[ix], ix + 1, 0);
+                acc.matchings.extend(delta.matchings.iter());
+                ps.sets = vec![delta];
             }
         });
         // P(|q|,1)
-
-        for t in 2..=b {
-            println!("2ed-deduce {}", query_chars.len());
-            let delta = self.second_deducing(&acc, &query_chars, query_chars.len(), t);
-            acc.matchings.extend(delta.matchings)
+        let max_b = 10;
+        if q.len() > 0 {
+            for t in 1..=max_b {
+                if acc.matchings.len() > req_matchings {
+                    println!("matchings {} / req {}", acc.matchings.len(), req_matchings);
+                    break;
+                }
+                println!("2ed-deduce {}", query_chars.len());
+                let delta = self.second_deducing(&acc, &query_chars, query_chars.len(), t);
+                acc.matchings.extend(delta.matchings)
+            }
         }
 
         acc
@@ -609,7 +615,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     ///
     /// Assumes `query`'s length in Unicode characters is bounded by UUU; will truncate to UUU::MAX characters otherwise
     pub fn autocomplete(&'_ self, query: &str, cache: &mut Cache<'_>) -> Vec<MeasuredPrefix> {
-        let set = self.assemble(query.into(), 0, cache);
+        let set = self.assemble(query.into(), 1, cache);
         let mut map: BTreeMap<MatchingRankKey, BTreeSet<NodeID>> = BTreeMap::new();
         for m in set.iter() {
             match map.entry(m.into()) {
@@ -621,11 +627,13 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 }
             }
         }
-        // todo: sort matching set
         let mut strs = Default::default();
         for (k, set) in map {
+            println!("{:?} set-len={}", k, set.len());
             for n in set {
-                self.trie.fill_results(&self.trie.nodes[n], &mut strs, 10);
+                if self.trie.fill_results(&self.trie.nodes[n], &mut strs, 10) {
+                    break;
+                }
             }
         }
         measure_results(strs, query)
@@ -729,6 +737,9 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     where
         'stored: 'b,
     {
+        if query_len == 0 {
+            unreachable!()
+        }
         let mut set_p4: MatchingSet<UUU> = Default::default();
         let mut per_matching = |matching: Matching<UUU>| -> () {
             let last_depth = min(

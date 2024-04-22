@@ -1,64 +1,6 @@
-# strprox
+# State of art prefix fuzzy autocompletion
 
-strprox is a library that currently allows for top-k string autocompletion.
-
-This is intended to implement the top-k "matching-based framework for error-tolerant autocompletion" algorithm from the paper by Deng et al. (see the [Citations](#citations))
-
-## Table of Contents
-- [Example](#example)
-- [Notes](#notes)
-- [Citations](#citations)
-- [License](#license)
-- [Contributions](#contrib)
-
-## [Example](#example)
-
-```rust
-use strprox::Autocompleter;
-
-fn main() {
-    // Here's the data that the autocompleter uses
-    let source = vec![
-        "success",
-        "successive",
-        "successor",
-        "decrease",
-        "decreasing",
-        "decrement",
-    ];
-    let autocompleter = Autocompleter::new(&source);
-    let query = "luck";
-
-    // Retrieve the 3 best strings for autocompletion
-    let result = autocompleter.autocomplete(query, 3);
-
-    // The prefix edit distance is the best edit distance between a full string and
-    // all the prefixes of another (refer to the paper by Deng et al.).
-    //
-    // Here the PED is between the query and the prefixes of the autocomplete strings.
-
-    // (string: success, PED: 2)
-    // (string: successive, PED: 2)
-    // (string: successor, PED: 2)
-    for measured_prefix in &result {
-        println!("{}", measured_prefix);
-    }
-
-    // Collect the strings from the resulting string and prefix edit distance combination
-    let result_strings: Vec<&str> = result
-        .iter()
-        .map(|measured_prefix| measured_prefix.string.as_str())
-        .collect();
-
-    assert_eq!(result_strings, vec!["success", "successive", "successor"]);
-}
-```
-
-## [Notes](#notes)
-
-`Autocompleter` is currently a generic struct that limits the length of referenced strings to `u8::MAX` and maximum number of referenced strings to `u32::MAX` by default for space efficiency. A macro can be added later to instantiate it for other unsigned types.
-
-Some of the tests require a file named [`words.txt`](https://github.com/dwyl/english-words/blob/master/words.txt) file (highlighted link) in `src/tests`.
+see [notes](./topk2.typ)
 
 ## [Citations](#citations)
 ```bibtex
