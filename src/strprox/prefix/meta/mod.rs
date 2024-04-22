@@ -1,7 +1,10 @@
 use std::{
     borrow::{Borrow, Cow},
-    cmp::{max, min},
-    collections::{btree_map::Entry, hash_map, BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
+    cmp::{max, min, Ordering},
+    collections::{
+        btree_map::{self, Entry},
+        hash_map, BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet,
+    },
     marker::PhantomData,
     ops::Range,
     sync::{Mutex, RwLock},
@@ -101,10 +104,19 @@ impl<'stored> Trie<'stored, UUU, SSS> {
         // this shouldn't be able to panic from the public API
         self.nodes.first().unwrap()
     }
-    fn fill_results(&self, node: &Node<UUU, SSS>, result: &mut HashSet<TreeString<'stored>>) {
+    fn fill_results(
+        &self,
+        node: &Node<UUU, SSS>,
+        result: &mut HashSet<TreeString<'stored>>,
+        limit: usize,
+    ) -> bool {
         for string_index in node.string_range.clone() {
             result.insert(self.strings[string_index as usize].clone());
+            if result.len() >= limit {
+                return true;
+            }
         }
+        false
     }
     /// Returns trie over `source` (expects `source` to have at most usize::MAX - 1 strings)
     pub fn new(len: usize, source: impl IntoIterator<Item = TreeString<'stored>>) -> Self {
@@ -312,40 +324,40 @@ pub struct Cache<'stored> {
 }
 
 impl<'x> Cache<'x> {
-    pub fn visit<'t, 'q>(&'t mut self, query: TreeString<'q>) -> Vec<(usize, &'t PState)> {
-        let mut ptree = &mut self.cached_prefix;
-        let query: TreeString<'q> = polonius!(|ptree| -> Vec<(usize, &'polonius PState)> {
-            let li = ptree.find_prefixes(query.chars());
-            // Invalidate 'em all
-            for (i, PState { prio, sets: _, ix }) in li.iter() {
-                let lock = prio.lock().unwrap();
-                self.lru.rm(&lock, ix);
+    pub fn visit<'t, 'q>(
+        &'t mut self,
+        query: TreeString<'q>,
+        mut cb: impl FnMut(usize, &mut PState),
+    ) {
+        println!("cache query {}", &query);
+        let ptree = &mut self.cached_prefix;
+        ptree.insert(query.chars(), |ps, i| {
+            if let Some(i) = i {
+                if let Some(ref mut ps) = ps.value {
+                    cb(i, ps);
+                    let mut lock = ps.prio.lock().unwrap();
+                    self.lru.prio.rm(&lock, &ps.ix);
+                    if i == query.len() - 1 {
+                        *lock = Instant::now();
+                        self.lru.prio.add(*lock, ps.ix)
+                    }
+                } else {
+                    ps.value = Some(PState {
+                        sets: Default::default(),
+                        prio: Instant::now().into(),
+                        ix: self
+                            .lru
+                            .slab
+                            .insert(TreeStringT::from_owned(query.to_string())),
+                    });
+                    cb(i, ps.value.as_mut().unwrap());
+                }
             }
-            if li.len() == query.len() {
-                let (i, tip) = li.last().unwrap();
-                let mut lock = tip.prio.lock().unwrap();
-                self.lru.rm(&lock, &tip.ix);
-                *lock = Instant::now();
-                polonius_return!(li)
-            }
-            query
         });
-        ptree.insert(
-            query.chars(),
-            PState {
-                sets: Default::default(),
-                prio: Instant::now().into(),
-                ix: self
-                    .lru
-                    .slab
-                    .insert(TreeStringT::from_owned(query.to_string())),
-            },
-        );
-        let li = ptree.find_prefixes(query.chars());
-        li
     }
 }
 
+#[derive(Debug)]
 pub struct PState {
     /// vec index as key, b -> P(i,b) delta
     sets: Vec<MatchingSet<UUU>>,
@@ -363,17 +375,22 @@ pub struct CacheMap<'s> {
     prio: BTreeMap<Instant, BTreeSet<usize>>,
 }
 
-impl<'s> CacheMap<'s> {
-    pub fn rm(&mut self, t: &Instant, k: &usize) -> bool {
-        if let Some(set) = self.prio.get_mut(t) {
+pub trait PrioMap {
+    fn rm(&mut self, t: &Instant, k: &usize) -> bool;
+    fn add(&mut self, t: Instant, k: usize);
+}
+
+impl PrioMap for BTreeMap<Instant, BTreeSet<usize>> {
+    fn rm(&mut self, t: &Instant, k: &usize) -> bool {
+        if let Some(set) = self.get_mut(t) {
             set.remove(k);
             true
         } else {
             false
         }
     }
-    pub fn add(&mut self, t: Instant, k: usize) {
-        match self.prio.entry(t) {
+    fn add(&mut self, t: Instant, k: usize) {
+        match self.entry(t) {
             Entry::Occupied(mut oc) => {
                 oc.get_mut().insert(k);
             }
@@ -425,49 +442,27 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         let query_chars: Vec<char> = q.chars().collect();
         // ----|
         //     |
-        let li = cache.visit(q.clone());
-        let missing: BTreeSet<_> = li
-            .iter()
-            .filter(|(_, x)| x.sets.len() < 1)
-            .map(|(k, _)| *k)
-            .collect();
-        drop(li);
         let mut acc = MatchingSet::new_trie(&self.trie);
-        for i in 0..q.len() {
-            if missing.contains(&i) {
-                let s = self.first_deducing(
-                    &mut acc,
-                    *query_chars.last().unwrap(),
-                    query_chars.len(),
-                    b,
-                );
-                let k = cache
-                    .cached_prefix
-                    .get_mut(query_chars[..=i].iter().map(|k| *k))
-                    .unwrap();
-                *k = PState {
-                    sets: [s].into(),
-                    prio: Instant::now().into(),
-                    ix: 0,
-                };
+        cache.visit(q.clone(), |ix, ps| {
+            if let Some(k) = ps.sets.get(0) {
+                println!("|{}| add matchings {}", ix, k.matchings.len());
+                acc.matchings.extend(k.matchings.iter())
+            } else {
+                println!("|{}| 1st-deduce set len={}", ix, acc.matchings.len());
+                let set = self.first_deducing(&acc, query_chars[ix], ix + 1, 0);
+                acc.matchings.extend(set.matchings.iter());
+                ps.sets = vec![set];
             }
-        }
-        drop(acc);
-
-        let li = cache.visit(q.clone());
-        let row1: HashMap<(UUU, NodeID), UUU> = li.iter().fold(HashMap::new(), |mut a, (i, n)| {
-            a.extend(n.sets[0].matchings.iter());
-            a
         });
-        let mut row1 = MatchingSet::new(row1);
         // P(|q|,1)
 
         for t in 2..=b {
-            let delta = self.second_deducing(&row1, &query_chars, query_chars.len(), t);
-            row1.matchings.extend(delta.matchings)
+            println!("2ed-deduce {}", query_chars.len());
+            let delta = self.second_deducing(&acc, &query_chars, query_chars.len(), t);
+            acc.matchings.extend(delta.matchings)
         }
 
-        row1
+        acc
     }
 }
 
@@ -517,7 +512,7 @@ where
     UUU: Clone,
 {
     /// Maps the first two parts of a matching to the edit distance
-    pub matchings: HashMap<(UUU, NodeID), UUU>,
+    pub matchings: BTreeMap<(UUU, NodeID), UUU>,
 }
 
 impl MatchingSet<UUU> {
@@ -540,11 +535,11 @@ impl MatchingSet<UUU> {
     }
     /// Returns a matching set with a matching for the root of the `trie` and an empty query
     fn new_trie(trie: &Trie<'_, UUU, SSS>) -> Self {
-        let mut matchings = HashMap::<(UUU, NodeID), UUU>::new();
+        let mut matchings = BTreeMap::<(UUU, NodeID), UUU>::new();
         let query_prefix_len = 0;
         let node = trie.root();
         let edit_distance = 0;
-        matchings.insert((query_prefix_len, trie.root().id()), edit_distance);
+        matchings.insert((query_prefix_len, node.id()), edit_distance);
         Self { matchings }
     }
 }
@@ -554,7 +549,7 @@ struct MatchingSetIter<'iter, UUU>
 where
     UUU: Clone,
 {
-    iter: hash_map::Iter<'iter, (UUU, usize), UUU>,
+    iter: btree_map::Iter<'iter, (UUU, usize), UUU>,
 }
 
 impl<'user> Iterator for MatchingSetIter<'user, UUU> {
@@ -572,47 +567,68 @@ impl<'user> Iterator for MatchingSetIter<'user, UUU> {
     }
 }
 
+/// Minimum = Rank-1st
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchingRankKey {
+    /// smaller better
+    b: UUU,
+    /// larger better
+    len: UUU,
+}
+
+impl PartialOrd for MatchingRankKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MatchingRankKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let ed = self.b.cmp(&other.b);
+        if ed == Ordering::Equal {
+            other.len.cmp(&self.len)
+        } else {
+            ed
+        }
+    }
+}
+
+impl From<Matching<UUU>> for MatchingRankKey {
+    fn from(value: Matching<UUU>) -> Self {
+        Self {
+            b: value.edit_distance,
+            len: value.query_prefix_len,
+        }
+    }
+}
+
 impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     /// Returns the top `requested` number of strings with the best prefix distance from the query
     /// sorted by prefix edit distance and then lexicographical order,
     /// or all strings available if `requested` is larger than the number stored
     ///
     /// Assumes `query`'s length in Unicode characters is bounded by UUU; will truncate to UUU::MAX characters otherwise
-    pub fn autocomplete(
-        &'_ self,
-        query: &str,
-        cache: &mut Cache<'_>,
-    ) -> Vec<MeasuredPrefix> {
-        let set = self.assemble(query.into(), 1, cache);
-        let mut strs = Default::default();
+    pub fn autocomplete(&'_ self, query: &str, cache: &mut Cache<'_>) -> Vec<MeasuredPrefix> {
+        let set = self.assemble(query.into(), 0, cache);
+        let mut map: BTreeMap<MatchingRankKey, BTreeSet<NodeID>> = BTreeMap::new();
         for m in set.iter() {
-            self.trie.fill_results(&self.trie.nodes[m.node], &mut strs);
-        }
-        measure_results(strs, query)
-    }
-
-    /// Adds the strings prefixed by `node` to `result` until all have been added or the `requested` size has been reached
-    ///
-    /// Returns whether the `requested` size has been reached
-    fn fill_results_limit(
-        &self,
-        node: &Node<UUU, SSS>,
-        result: &mut HashSet<TreeString<'stored>>,
-        requested: usize,
-    ) -> bool {
-        if requested == 0 {
-            return true;
-        }
-        debug_assert_ne!(result.len(), requested);
-
-        for string_index in node.string_range.clone() {
-            result.insert(self.trie.strings[string_index as usize].clone());
-            if result.len() >= requested {
-                return true;
+            match map.entry(m.into()) {
+                Entry::Occupied(mut oc) => {
+                    oc.get_mut().insert(m.node);
+                }
+                Entry::Vacant(va) => {
+                    va.insert(BTreeSet::from_iter([m.node]));
+                }
             }
         }
-        debug_assert_ne!(result.len(), requested);
-        false
+        // todo: sort matching set
+        let mut strs = Default::default();
+        for (k, set) in map {
+            for n in set {
+                self.trie.fill_results(&self.trie.nodes[n], &mut strs, 10);
+            }
+        }
+        measure_results(strs, query)
     }
     /// Applies the `visitor` function to all descendants in the inverted index at `depth` and `character` of `matching.node`
     fn traverse_inverted_index<'a, VisitorFn>(
@@ -654,8 +670,8 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         let mut edit_distances = HashMap::<usize, UUU>::new(); // Node ID to ED(q,n)
         for m1 in set.iter() {
             if m1.edit_distance <= b as UUU
-                && m1.query_prefix_len >= (query_len - 1 - b) as UUU
-                && m1.query_prefix_len <= (query_len - 1) as UUU
+                && m1.query_prefix_len >= (query_len.saturating_sub(1 + b)) as UUU
+                && m1.query_prefix_len <= (query_len.saturating_sub(1)) as UUU
             // m1.i >= i-1
             {
                 let m1_node = &self.trie.nodes[m1.node];
@@ -670,7 +686,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                             |id, descendant| {
                                 // the depth of a node is equal to the length of its associated prefix
                                 let ded = m1.deduced_edit_distance(
-                                    query_len - 1,
+                                    query_len.saturating_sub(1),
                                     depth.saturating_sub(1) as usize,
                                     &self.trie.nodes,
                                 );
