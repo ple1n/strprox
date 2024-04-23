@@ -440,11 +440,14 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         cache: &mut Cache<'_>,
     ) -> MatchingSet<UUU> {
         let query_chars: Vec<char> = q.chars().collect();
-        // ----|
-        //     |
+        // -0-0- .... -0-|
+        //               | 1
+        //               | 2
         let mut acc = MatchingSet::new_trie(&self.trie);
         cache.visit(q.clone(), |ix, ps| {
-            if let Some(k) = ps.sets.get(0) {
+            if let Some(k) = ps.sets.get(0)
+                && false
+            {
                 println!("|{}| add matchings {}", ix, k.matchings.len());
                 acc.matchings.extend(k.matchings.iter())
             } else {
@@ -458,7 +461,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         let max_b = 10;
         if q.len() > 0 {
             for t in 1..=max_b {
-                if acc.matchings.len() > req_matchings {
+                if acc.matchings.len() > req_matchings && t > 2 {
                     println!("matchings {} / req {}", acc.matchings.len(), req_matchings);
                     break;
                 }
@@ -504,7 +507,7 @@ impl<'stored> Matching<UUU> {
     }
     /// Returns an upper bound on the edit distance between the query and the matching node's prefix
     fn deduced_prefix_edit_distance(&self, query_len: usize) -> usize {
-        self.edit_distance as usize + query_len - self.query_prefix_len as usize
+        self.edit_distance as usize + query_len.saturating_sub(self.query_prefix_len as usize)
     }
 }
 
@@ -577,9 +580,13 @@ impl<'user> Iterator for MatchingSetIter<'user, UUU> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchingRankKey {
     /// smaller better
-    b: UUU,
+    edit_distance: UUU,
     /// larger better
-    len: UUU,
+    query_prefix_len: UUU,
+    /// larger better
+    node_depth: UUU,
+    /// smaller better
+    score: usize,
 }
 
 impl PartialOrd for MatchingRankKey {
@@ -590,20 +597,19 @@ impl PartialOrd for MatchingRankKey {
 
 impl Ord for MatchingRankKey {
     fn cmp(&self, other: &Self) -> Ordering {
-        let ed = self.b.cmp(&other.b);
-        if ed == Ordering::Equal {
-            other.len.cmp(&self.len)
-        } else {
-            ed
-        }
+        self.score.cmp(&other.score)
     }
 }
 
-impl From<Matching<UUU>> for MatchingRankKey {
-    fn from(value: Matching<UUU>) -> Self {
+impl MatchingRankKey {
+    fn from_matching(m: Matching<UUU>, nodes: &TrieNodes<UUU, SSS>, query: &str) -> Self {
         Self {
-            b: value.edit_distance,
-            len: value.query_prefix_len,
+            edit_distance: m.edit_distance,
+            query_prefix_len: m.query_prefix_len,
+            node_depth: nodes[m.node].depth,
+            score: query.len().abs_diff(m.query_prefix_len.into())
+                + query.len().abs_diff(nodes[m.node].depth.into())
+                + m.edit_distance as usize,
         }
     }
 }
@@ -618,7 +624,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         let set = self.assemble(query.into(), 1, cache);
         let mut map: BTreeMap<MatchingRankKey, BTreeSet<NodeID>> = BTreeMap::new();
         for m in set.iter() {
-            match map.entry(m.into()) {
+            match map.entry(MatchingRankKey::from_matching(m, &self.trie.nodes, query)) {
                 Entry::Occupied(mut oc) => {
                     oc.get_mut().insert(m.node);
                 }
@@ -627,6 +633,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 }
             }
         }
+
         let mut strs = Default::default();
         for (k, set) in map {
             println!("{:?} set-len={}", k, set.len());
@@ -699,12 +706,11 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                                     &self.trie.nodes,
                                 );
                                 let ded = ded as UUU;
-                                let n2 = descendant.id();
                                 if ded <= b as UUU {
-                                    if let Some(edit_distance) = edit_distances.get_mut(&n2) {
+                                    if let Some(edit_distance) = edit_distances.get_mut(&id) {
                                         *edit_distance = min(*edit_distance, ded);
                                     } else {
-                                        edit_distances.insert(n2, ded);
+                                        edit_distances.insert(id, ded);
                                     }
                                 }
                             },
