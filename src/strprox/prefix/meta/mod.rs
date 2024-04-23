@@ -12,7 +12,10 @@ use std::{
 };
 
 use super::{FromStrings, MeasuredPrefix};
-use crate::{levenshtein, Autocompleter};
+use crate::{
+    levenshtein::{self, edit_distance},
+    Autocompleter,
+};
 
 use debug_print::debug_println;
 use polonius_the_crab::{polonius, polonius_return};
@@ -401,6 +404,11 @@ impl PrioMap for BTreeMap<Instant, BTreeSet<usize>> {
     }
 }
 
+#[test]
+pub fn edtest() {
+    dbg!(edit_distance("quer", "qzer"));
+}
+
 impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     /// Constructs an Autocompleter given the string dataset `source` (does not copy strings)
     pub fn new(len: usize, source: impl IntoIterator<Item = TreeString<'stored>>) -> Self {
@@ -433,43 +441,37 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         cache.lru.prio = cache.lru.prio.split_off(&cutoff);
     }
     /// P(|q|,b)
-    pub fn assemble<'q>(
-        &self,
-        q: TreeString<'q>,
-        req_matchings: usize,
-        cache: &mut Cache<'_>,
-    ) -> MatchingSet<UUU> {
+    pub fn assemble<'q>(&self, q: TreeString<'q>, cache: &mut Cache<'_>) -> MatchingSet<UUU> {
         let query_chars: Vec<char> = q.chars().collect();
         // -0-0- .... -0-|
         //               | 1
         //               | 2
         let mut acc = MatchingSet::new_trie(&self.trie);
         cache.visit(q.clone(), |ix, ps| {
-            if let Some(k) = ps.sets.get(0)
-                && false
-            {
+            if let Some(k) = ps.sets.get(0) {
                 println!("|{}| add matchings {}", ix, k.matchings.len());
                 acc.matchings.extend(k.matchings.iter())
             } else {
                 println!("|{}| 1st-deduce set len={}", ix, acc.matchings.len());
                 let delta = self.first_deducing(&acc, query_chars[ix], ix + 1, 0);
-                acc.matchings.extend(delta.matchings.iter());
+                acc.extend(&delta);
                 ps.sets = vec![delta];
             }
-        });
-        // P(|q|,1)
-        let max_b = 10;
-        if q.len() > 0 {
-            for t in 1..=max_b {
-                if acc.matchings.len() > req_matchings && t > 2 {
-                    println!("matchings {} / req {}", acc.matchings.len(), req_matchings);
-                    break;
+            if ix == q.len() - 1 && q.len() > 0 {
+                for t in 1..=2 {
+                    if let Some(cached) = ps.sets.get(t) {
+                        println!("|{}| add matchings {}", ix, cached.matchings.len());
+                        acc.matchings.extend(cached.matchings.iter());
+                    } else {
+                        println!("|{}| 2nd-deduce {}", ix, query_chars.len());
+                        let new = self.second_deducing(&acc, &query_chars, query_chars.len(), t);
+                        acc.extend(&new);
+                        assert!(ps.sets.len() - 1 == t - 1);
+                        ps.sets.push(new);
+                    }
                 }
-                println!("2ed-deduce {}", query_chars.len());
-                let delta = self.second_deducing(&acc, &query_chars, query_chars.len(), t);
-                acc.matchings.extend(delta.matchings)
             }
-        }
+        });
 
         acc
     }
@@ -551,6 +553,18 @@ impl MatchingSet<UUU> {
         matchings.insert((query_prefix_len, node.id()), edit_distance);
         Self { matchings }
     }
+    fn extend(&mut self, new: &Self) {
+        for (k, v) in &new.matchings {
+            match self.matchings.entry(*k) {
+                Entry::Occupied(mut oc) => {
+                    oc.insert(min(*oc.get(), *v));
+                }
+                Entry::Vacant(va) => {
+                    va.insert(*v);
+                }
+            }
+        }
+    }
 }
 
 /// Iterator over the matchings in a MatchingSet
@@ -621,7 +635,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     ///
     /// Assumes `query`'s length in Unicode characters is bounded by UUU; will truncate to UUU::MAX characters otherwise
     pub fn autocomplete(&'_ self, query: &str, cache: &mut Cache<'_>) -> Vec<MeasuredPrefix> {
-        let set = self.assemble(query.into(), 1, cache);
+        let set = self.assemble(query.into(), cache);
         let mut map: BTreeMap<MatchingRankKey, BTreeSet<NodeID>> = BTreeMap::new();
         for m in set.iter() {
             match map.entry(MatchingRankKey::from_matching(m, &self.trie.nodes, query)) {
@@ -634,15 +648,18 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             }
         }
 
-        let mut strs = Default::default();
-        for (k, set) in map {
-            println!("{:?} set-len={}", k, set.len());
-            for n in set {
-                if self.trie.fill_results(&self.trie.nodes[n], &mut strs, 10) {
-                    break;
-                }
+        let mut strs: HashSet<Cow<'_, str>> = Default::default();
+        for (ix, (k, set)) in map.into_iter().enumerate() {
+            if ix > 3 {
+                break;
             }
-        }
+            println!("{:?} set-len={}", k, set.len());
+            for id in set {
+                let x = strs.len();
+                self.trie
+                    .fill_results(&self.trie.nodes[id], &mut strs, x + 3);
+            }
+        } // zorepinephrine
         measure_results(strs, query)
     }
     /// Applies the `visitor` function to all descendants in the inverted index at `depth` and `character` of `matching.node`

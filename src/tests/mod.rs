@@ -396,8 +396,8 @@ fn bench_noise() {
         dbg!(result);
 
         start = Instant::now();
-        let result = meta_autocomp.threshold_topk(query, requested, MAX_THRESHOLD);
-        println!("META autocomplete took {} ms", start.elapsed().as_millis());
-        dbg!(result);
+        // let result = meta_autocomp.threshold_topk(query, requested, MAX_THRESHOLD);
+        // println!("META autocomplete took {} ms", start.elapsed().as_millis());
+        // dbg!(result);
     }
 }
