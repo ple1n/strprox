@@ -4,3 +4,4 @@ Cargo.lock
 words.txt
 noise.txt
 noise.fst
+*.pdf

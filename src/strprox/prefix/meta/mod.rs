@@ -442,15 +442,18 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     }
     /// P(|q|,b)
     pub fn assemble<'q>(&self, q: TreeString<'q>, cache: &mut Cache<'_>) -> MatchingSet<UUU> {
+        let use_cache = true;
         let query_chars: Vec<char> = q.chars().collect();
         // -0-0- .... -0-|
         //               | 1
         //               | 2
         let mut acc = MatchingSet::new_trie(&self.trie);
         cache.visit(q.clone(), |ix, ps| {
-            if let Some(k) = ps.sets.get(0) {
+            if let Some(k) = ps.sets.get(0)
+                && use_cache
+            {
                 println!("|{}| add matchings {}", ix, k.matchings.len());
-                acc.matchings.extend(k.matchings.iter())
+                acc.extend(k);
             } else {
                 println!("|{}| 1st-deduce set len={}", ix, acc.matchings.len());
                 let delta = self.first_deducing(&acc, query_chars[ix], ix + 1, 0);
@@ -459,12 +462,19 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             }
             if ix == q.len() - 1 && q.len() > 0 {
                 for t in 1..=2 {
-                    if let Some(cached) = ps.sets.get(t) {
+                    if let Some(cached) = ps.sets.get(t)
+                        && use_cache
+                    {
                         println!("|{}| add matchings {}", ix, cached.matchings.len());
-                        acc.matchings.extend(cached.matchings.iter());
+                        acc.extend(cached);
                     } else {
-                        println!("|{}| 2nd-deduce {}", ix, query_chars.len());
                         let new = self.second_deducing(&acc, &query_chars, query_chars.len(), t);
+                        println!(
+                            "|{}| 2nd-deduce {} set-len={}",
+                            ix,
+                            query_chars.len(),
+                            new.matchings.len()
+                        );
                         acc.extend(&new);
                         assert!(ps.sets.len() - 1 == t - 1);
                         ps.sets.push(new);
@@ -611,7 +621,22 @@ impl PartialOrd for MatchingRankKey {
 
 impl Ord for MatchingRankKey {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.score.cmp(&other.score)
+        let score = self.score.cmp(&other.score);
+        let ed = self.edit_distance.cmp(&other.edit_distance);
+        let qp = other.query_prefix_len.cmp(&self.query_prefix_len);
+        if score == Ordering::Equal {
+            if ed == Ordering::Equal {
+                if qp == Ordering::Equal {
+                    other.node_depth.cmp(&self.node_depth)
+                } else {
+                    qp
+                }
+            } else {
+                ed
+            }
+        } else {
+            score
+        }
     }
 }
 
@@ -647,17 +672,15 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 }
             }
         }
-
         let mut strs: HashSet<Cow<'_, str>> = Default::default();
         for (ix, (k, set)) in map.into_iter().enumerate() {
-            if ix > 3 {
-                break;
-            }
             println!("{:?} set-len={}", k, set.len());
-            for id in set {
-                let x = strs.len();
-                self.trie
-                    .fill_results(&self.trie.nodes[id], &mut strs, x + 3);
+            if ix < 4 {
+                for id in set {
+                    let x = strs.len();
+                    self.trie
+                        .fill_results(&self.trie.nodes[id], &mut strs, x + 3);
+                }
             }
         } // zorepinephrine
         measure_results(strs, query)
@@ -769,11 +792,11 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 self.trie.nodes[matching.node].depth as usize + b - matching.edit_distance as usize
                     + 1,
                 self.inverted_index.max_depth(),
-            );
+            ); // k+1+|n1|=|n1|+b-ed+1
             let last_query_prefix_len = min(
                 matching.query_prefix_len as usize + b - matching.edit_distance as usize + 1, // k+1+i_1
                 query_len,
-            );
+            ); // k+1+i1=b-m.ed+1+i1
 
             let mut check =
                 |node: NodeID, descendant: &Node<UUU, SSS>, query_prefix_len: usize| -> () {
@@ -800,8 +823,8 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 if query_prefix_len.abs_diff(last_depth) <= b {
                     self.traverse_inverted_index(
                         matching.clone(),
-                        last_depth,
-                        character,
+                        last_depth, // right. j=k+1+[n1]
+                        character,  // i<k+1+i1
                         |id, descendant| check(id, descendant, query_prefix_len),
                     );
                 }
@@ -812,7 +835,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 if last_query_prefix_len.abs_diff(depth) <= b {
                     self.traverse_inverted_index(
                         matching.clone(),
-                        depth,
+                        depth, // left. j<k+1+|n1|
                         last_character,
                         |id, descendant| check(id, descendant, last_query_prefix_len),
                     );
@@ -821,8 +844,8 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
 
             self.traverse_inverted_index(
                 matching.clone(),
-                last_query_prefix_len,
-                last_character,
+                last_depth,     // j=k+1+|n1|
+                last_character, // i=k+1+|n1|
                 |id, descendant| check(id, descendant, last_query_prefix_len),
             );
         };
