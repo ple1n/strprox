@@ -204,7 +204,7 @@ impl<'stored> Trie<'stored, UUU, SSS> {
                     debug_assert_eq!(
                         offset,
                         self.strings[start..end].partition_point(
-                            |string| string < &TreeStringT::from_string(&lexicographic_marker)
+                            |string| string < &TreeString::from_string(&lexicographic_marker)
                         )
                     );
                     child_end = start + offset;
