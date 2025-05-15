@@ -1,6 +1,10 @@
 # State of art prefix fuzzy autocompletion
 
-see [notes](./topk2.typ)
+Improved implementation over original paper.
+
+See [math](./topk_search.typ) in Typst.
+
+The time complexity is dependent on the active matching set, and the size of tree overall, which doesn't explode as you type in longer strings.
 
 ## [Citations](#citations)
 ```bibtex

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{levenshtein, MeasuredPrefix};
 
-use super::{Autocompleter, PrefixRanking, PrefixRankings, FromStrings};
+use super::{Autocompleter, FromStrings, PrefixRanking, PrefixRankings};
 
 /// Supports error-tolerant autocompletion against a finite-state transducer index
 pub struct FstAutocompleter<D: AsRef<[u8]>> {
@@ -22,7 +22,13 @@ pub struct FstAutocompleter<D: AsRef<[u8]>> {
 }
 
 impl<D: AsRef<[u8]>> Autocompleter for FstAutocompleter<D> {
-    fn threshold_topk(&self, query: &str, requested: usize, max_threshold: usize) -> Vec<MeasuredPrefix> {
+    fn threshold_topk(
+        &self,
+        query: &str,
+        requested: usize,
+        max_threshold: usize,
+        state: &mut (),
+    ) -> Vec<MeasuredPrefix> {
         if requested == 0 {
             return vec![];
         }
@@ -272,7 +278,9 @@ impl<D: AsRef<[u8]>> FstAutocompleter<D> {
                                     &mut added,
                                 );
                                 prefix.pop();
-                                if added == requested { return; }
+                                if added == requested {
+                                    return;
+                                }
                                 dest_index += 1;
                             }
                             dest_set_index += 1;

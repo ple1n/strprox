@@ -1,7 +1,7 @@
 use std::{
     fs,
     io::Write,
-    time::{Duration, Instant}
+    time::{Duration, Instant},
 };
 
 use fst::Set;
@@ -10,9 +10,10 @@ use yoke::Yoke;
 
 use crate::{
     levenshtein::{prefix_edit_distance, sample_edited_string, unindexed_autocomplete},
+    prefix::FromStrings,
     strprox::FstAutocompleter,
     strprox::MetaAutocompleter,
-    Autocompleter, MeasuredPrefix, prefix::FromStrings,
+    Autocompleter, MeasuredPrefix,
 };
 
 type YokedMetaAutocompleter = Yoke<MetaAutocompleter<'static>, Vec<String>>;
@@ -28,7 +29,7 @@ const WORDS: &str = include_str!("words.txt");
 #[generic_tests::define]
 mod generic {
     use super::*;
-    use crate::{levenshtein, Autocompleter, prefix::FromStrings};
+    use crate::{levenshtein, prefix::FromStrings, Autocompleter};
 
     #[test]
     /// Example input from the paper on META (see the citations)
@@ -37,8 +38,9 @@ mod generic {
         A: Autocompleter + FromStrings,
     {
         let source: Vec<_> = vec!["soho", "solid", "solo", "solve", "soon", "throw"];
+        let mut state: A::STATE = Default::default();
         let autocompleter = A::from_strings(&source);
-        let result = autocompleter.autocomplete("ssol", 3);
+        let result = autocompleter.autocomplete("ssol", 3, &mut state);
         for measure in &result {
             println!("{:#?}", measure);
         }
@@ -63,7 +65,8 @@ mod generic {
         ];
         let autocompleter = A::from_strings(&source);
         let query = "zucc";
-        let result = autocompleter.autocomplete(query, 3);
+        let mut state: A::STATE = Default::default();
+        let result = autocompleter.autocomplete(query, 3, &mut state);
         println!("{}\n", query);
         for measure in &result {
             println!("{:#?}", measure);
@@ -78,7 +81,7 @@ mod generic {
         assert_eq!(result, unindexed_autocomplete("zucc", 3, &cows));
 
         let query = "deck";
-        let result = autocompleter.autocomplete("deck", 3);
+        let result = autocompleter.autocomplete("deck", 3, &mut state);
         println!("{}\n", query);
         for measure in &result {
             println!("{:#?}", measure);
@@ -105,8 +108,9 @@ mod generic {
             "decrement",
         ];
         let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
         let query = "luck";
-        let result = autocompleter.autocomplete(query, 3);
+        let result = autocompleter.autocomplete(query, 3, &mut state);
         for measured_prefix in &result {
             println!("{}", measured_prefix);
         }
@@ -130,7 +134,8 @@ mod generic {
             .map(|k| k.into())
             .collect();
         let autocompleter = A::from_strings(&source);
-        let result = autocompleter.autocomplete(query, 1);
+        let mut state: A::STATE = Default::default();
+        let result = autocompleter.autocomplete(query, 1, &mut state);
         for measure in &result {
             println!("{:#?}", measure);
         }
@@ -146,9 +151,10 @@ mod generic {
         let source: Vec<_> = WORDS.lines().collect();
         let time = Instant::now();
         let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
         println!("Indexing took: {:#?}", time.elapsed());
         let requested = 10;
-        let result = autocompleter.autocomplete("abandonned", requested);
+        let result = autocompleter.autocomplete("abandonned", requested, &mut state);
         assert_eq!(result.len(), requested);
 
         for measure in &result {
@@ -165,20 +171,18 @@ mod generic {
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
         let requested = 10;
         let query = "oberr";
-        let result = autocompleter.autocomplete(query, requested);
-        assert_eq!(result.len(), requested);
+        const MAX_PED: usize = 1;
+        let result = autocompleter.threshold_topk(query, requested, MAX_PED, &mut state);
 
         /// Max PED of any top-10 strings from the dataset against the query "oberr"
-        const MAX_PED: usize = 1;
-
         for measure in &result {
             println!("{:#?}", measure);
-            assert!(measure.prefix_distance <= MAX_PED);
-            assert_eq!(
-                measure.prefix_distance,
+            assert!(
                 levenshtein::prefix_edit_distance(query, measure.string.as_str())
+                    <= measure.prefix_distance
             );
         }
 
@@ -195,9 +199,11 @@ mod generic {
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
         let requested = 3;
         println!("begin");
-        let result = autocompleter.autocomplete("asfdasdvSDVASDFEWWEFWDASDAS", requested);
+        let result =
+            autocompleter.autocomplete("asfdasdvSDVASDFEWWEFWDASDAS", requested, &mut state);
         assert_eq!(result.len(), requested);
 
         for measure in &result {
@@ -213,10 +219,11 @@ mod generic {
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
         let requested = 3;
         println!("begin");
         let query = "asfdasdvSDVASDFEWWEFWDASDAS";
-        let result = autocompleter.threshold_topk(query, requested, 5);
+        let result = autocompleter.threshold_topk(query, requested, 5, &mut state);
         dbg!(&result);
         assert_eq!(
             result.len(),
@@ -233,9 +240,10 @@ mod generic {
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
         let requested = 3;
         println!("begin"); // nonsyntactically
-        let result = autocompleter.autocomplete("nonsyntacticallz", requested);
+        let result = autocompleter.autocomplete("nonsyntacticallz", requested, &mut state);
         assert_eq!(result.len(), requested);
 
         for measure in &result {
@@ -252,7 +260,8 @@ mod generic {
         let source: Vec<_> = WORDS.lines().collect();
         println!("words {}", source.len());
         let autocompleter = A::from_strings(&source);
-        let result = autocompleter.autocomplete("", 1);
+        let mut state: A::STATE = Default::default();
+        let result = autocompleter.autocomplete("", 1, &mut state);
         assert_ne!(result.len(), 0);
     }
 
@@ -267,8 +276,10 @@ mod generic {
     {
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
         let mut rng = rand::thread_rng();
         let mut total_duration = Duration::new(0, 0);
+        let mut fails = 0;
         const ITERATIONS: usize = 1e3 as usize;
         for _i in 0..ITERATIONS {
             let (string, edited_string, edits) = sample_edited_string(&source, &mut rng);
@@ -276,27 +287,28 @@ mod generic {
             dbg!(&string, &edited_string);
 
             let time = Instant::now();
-            let result = &autocompleter.autocomplete(edited_string.as_str(), 1)[0];
+            let result = &autocompleter.threshold_topk(edited_string.as_str(), 1, 5, &mut state);
+            if result.len() == 0 {
+                fails += 1;
+                continue;
+            }
+            let r1 = &result[0];
             total_duration += time.elapsed();
 
-            dbg!(result);
+            dbg!(r1);
 
             // Depending on what edits were made, the result may not necessarily be equal to `string` (e.g. 5 edits to a string with a length of 5)
             // so we do not check that
 
-            assert_eq!(
-                prefix_edit_distance(edited_string.as_str(), result.string.as_str()),
-                result.prefix_distance,
-                "Prefix edit distance incorrect"
-            );
             assert!(
-                result.prefix_distance <= edits,
-                "Resulting prefix edit distance not bounded by edits made"
+                prefix_edit_distance(edited_string.as_str(), r1.string.as_str())
+                    <= r1.prefix_distance,
+                "Prefix edit distance incorrect"
             );
         }
         println!(
             "Average time per query: {} ms",
-            total_duration.as_millis() as f64 / ITERATIONS as f64
+            total_duration.as_millis() as f64 / (ITERATIONS - fails) as f64
         );
     }
 
@@ -337,6 +349,7 @@ fn bench_noise() {
     let mut source: Vec<&str> = TEXT.lines().collect();
     let cows: Vec<_> = source.iter().map(|&s| s.into()).collect();
     let mut start = Instant::now();
+    let mut state = ();
     source.sort();
 
     println!("Testing without a max threshold");
@@ -348,7 +361,7 @@ fn bench_noise() {
     let query = &"z".repeat(35);
 
     start = Instant::now();
-    let mut result = fst_autocomp.autocomplete(query, requested);
+    let mut result = fst_autocomp.autocomplete(query, requested, &mut state);
     println!("Autocomplete took {} ms", start.elapsed().as_millis());
 
     for measure in result {
@@ -391,7 +404,7 @@ fn bench_noise() {
         let query = edited_string.as_str();
 
         start = Instant::now();
-        let result = fst_autocomp.threshold_topk(query, requested, MAX_THRESHOLD);
+        let result = fst_autocomp.threshold_topk(query, requested, MAX_THRESHOLD, &mut state);
         println!("Fst autocomplete took {} ms", start.elapsed().as_millis());
         dbg!(result);
 

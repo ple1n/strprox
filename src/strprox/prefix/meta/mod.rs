@@ -331,6 +331,7 @@ impl<'x> Cache<'x> {
         &'t mut self,
         query: TreeString<'q>,
         mut cb: impl FnMut(usize, &mut PState),
+        query_len: usize,
     ) {
         println!("cache query {}", &query);
         let ptree = &mut self.cached_prefix;
@@ -340,7 +341,7 @@ impl<'x> Cache<'x> {
                     cb(i, ps);
                     let mut lock = ps.prio.lock().unwrap();
                     self.lru.prio.rm(&lock, &ps.ix);
-                    if i == query.len() - 1 {
+                    if i == query_len - 1 {
                         *lock = Instant::now();
                         self.lru.prio.add(*lock, ps.ix)
                     }
@@ -447,41 +448,109 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         // -0-0- .... -0-|
         //               | 1
         //               | 2
+        let qlen = query_chars.len();
         let mut acc = MatchingSet::new_trie(&self.trie);
-        cache.visit(q.clone(), |ix, ps| {
-            if let Some(k) = ps.sets.get(0)
-                && use_cache
-            {
-                println!("|{}| add matchings {}", ix, k.matchings.len());
-                acc.extend(k);
-            } else {
-                println!("|{}| 1st-deduce set len={}", ix, acc.matchings.len());
-                let delta = self.first_deducing(&acc, query_chars[ix], ix + 1, 0);
-                acc.extend(&delta);
-                ps.sets = vec![delta];
-            }
-            if ix == q.len() - 1 && q.len() > 0 {
-                for t in 1..=2 {
+        cache.visit(
+            q.clone(),
+            |ix, ps| {
+                if let Some(k) = ps.sets.get(0)
+                    && use_cache
+                {
+                    println!("|{}| add matchings {}", ix, k.matchings.len());
+                    acc.extend(k);
+                } else {
+                    println!("|{}| 1st-deduce set len={}", ix, acc.matchings.len());
+                    let delta = self.first_deducing(&acc, query_chars[ix], ix + 1, 0);
+                    acc.extend(&delta);
+                    ps.sets = vec![delta];
+                }
+                if ix == qlen - 1 && qlen > 0 {
+                    for t in 1..=2 {
+                        if let Some(cached) = ps.sets.get(t)
+                            && use_cache
+                        {
+                            println!("|{}| add matchings {}", ix, cached.matchings.len());
+                            acc.extend(cached);
+                        } else {
+                            let new =
+                                self.second_deducing(&acc, &query_chars, query_chars.len(), t);
+                            println!(
+                                "|{}| 2nd-deduce {} set-len={}",
+                                ix,
+                                query_chars.len(),
+                                new.matchings.len()
+                            );
+                            acc.extend(&new);
+                            assert!(ps.sets.len() - 1 == t - 1);
+                            ps.sets.push(new);
+                        }
+                    }
+                }
+            },
+            qlen,
+        );
+
+        acc
+    }
+    pub fn threshold_topk<'q>(
+        &self,
+        q: TreeString<'q>,
+        cache: &mut Cache<'_>,
+        max_ped: usize,
+        num_entries: usize,
+    ) -> MatchingSet<UUU> {
+        let use_cache = true;
+        let query_chars: Vec<char> = q.chars().collect();
+        let qlen = query_chars.len();
+        let mut acc = MatchingSet::new_trie(&self.trie);
+        let mut b = 0; // b of previous P(q)
+        println!("qlen={}", qlen);
+        cache.visit(
+            q.clone(),
+            |ix, ps| {
+                let cursor = ix + 1;
+                if let Some(k) = ps.sets.get(0)
+                    && use_cache
+                {
+                    // println!("|P({},{})| +{}", cursor, b, k.matchings.len());
+                    acc.extend(k);
+                } else {
+                    // P(q,b) -> P(q+1=cursor,b)
+                    let delta = self.first_deducing(&acc, query_chars[ix], cursor, b);
+                    println!("|P({cursor},{b})| +{}", delta.matchings.len());
+                    let qlen = delta.iter().max_by_key(|f| f.query_prefix_len);
+                    if qlen.is_some() {
+                        println!("max q = {}", qlen.unwrap().query_prefix_len);
+                    }
+                    acc.extend(&delta);
+                    ps.sets = vec![delta];
+                }
+
+                let mut max_b = b;
+                for t in b..=min(b + 1, max_ped) {
                     if let Some(cached) = ps.sets.get(t)
                         && use_cache
                     {
-                        println!("|{}| add matchings {}", ix, cached.matchings.len());
+                        // println!("|P({cursor},{b})| +{}", cached.matchings.len());
+                        if cached.matchings.len() > 0 {
+                            max_b = max_b.max(t);
+                        }
                         acc.extend(cached);
                     } else {
-                        let new = self.second_deducing(&acc, &query_chars, query_chars.len(), t);
-                        println!(
-                            "|{}| 2nd-deduce {} set-len={}",
-                            ix,
-                            query_chars.len(),
-                            new.matchings.len()
-                        );
+                        // P(q,b) -> P(q,b+1)
+                        let new = self.second_deducing(&acc, &query_chars, qlen, t);
+                        println!("|P({cursor},{t})| +{}", new.matchings.len());
+                        if new.matchings.len() > 0 {
+                            max_b = max_b.max(t);
+                        }
                         acc.extend(&new);
-                        assert!(ps.sets.len() - 1 == t - 1);
                         ps.sets.push(new);
                     }
                 }
-            }
-        });
+                b = min(max_ped, max_b + 1);
+            },
+            qlen,
+        );
 
         acc
     }
@@ -603,11 +672,8 @@ impl<'user> Iterator for MatchingSetIter<'user, UUU> {
 /// Minimum = Rank-1st
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchingRankKey {
-    /// smaller better
     edit_distance: UUU,
-    /// larger better
     query_prefix_len: UUU,
-    /// larger better
     node_depth: UUU,
     /// smaller better
     score: usize,
@@ -726,36 +792,27 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         for m1 in set.iter() {
             if m1.edit_distance <= b as UUU
                 && m1.query_prefix_len >= (query_len.saturating_sub(1 + b)) as UUU
-                && m1.query_prefix_len <= (query_len.saturating_sub(1)) as UUU
-            // m1.i >= i-1
             {
                 let m1_node = &self.trie.nodes[m1.node];
                 let m1_depth = m1_node.depth as usize;
                 for depth in m1_depth + 1..=min(m1_depth + b + 1, self.inverted_index.max_depth()) {
-                    // theorem ed-delta
-                    if query_len.abs_diff(depth) <= b {
-                        self.traverse_inverted_index(
-                            m1.clone(),
-                            depth,
-                            character,
-                            |id, descendant| {
-                                // the depth of a node is equal to the length of its associated prefix
-                                let ded = m1.deduced_edit_distance(
-                                    query_len.saturating_sub(1),
-                                    depth.saturating_sub(1) as usize,
-                                    &self.trie.nodes,
-                                );
-                                let ded = ded as UUU;
-                                if ded <= b as UUU {
-                                    if let Some(edit_distance) = edit_distances.get_mut(&id) {
-                                        *edit_distance = min(*edit_distance, ded);
-                                    } else {
-                                        edit_distances.insert(id, ded);
-                                    }
-                                }
-                            },
+                    self.traverse_inverted_index(m1.clone(), depth, character, |id, descendant| {
+                        // the depth of a node is equal to the length of its associated prefix
+                        let ded = m1.deduced_edit_distance(
+                            query_len.saturating_sub(1),
+                            depth.saturating_sub(1) as usize,
+                            &self.trie.nodes,
                         );
-                    }
+                        let ded = ded as UUU;
+                        if ded <= b as UUU {
+                            if let Some(edit_distance) = edit_distances.get_mut(&id) {
+                                *edit_distance = min(*edit_distance, ded);
+                            } else {
+                                edit_distances.insert(id, ded);
+                            }
+                        }
+                    });
+                    // }
                 }
             }
         }
@@ -783,24 +840,21 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     where
         'stored: 'b,
     {
-        if query_len == 0 {
+        if query_len == 0 || b < 1 {
             unreachable!()
         }
         let mut set_p4: MatchingSet<UUU> = Default::default();
         let mut per_matching = |matching: Matching<UUU>| -> () {
             let last_depth = min(
-                self.trie.nodes[matching.node].depth as usize + b - matching.edit_distance as usize
-                    + 1,
+                self.trie.nodes[matching.node].depth as usize + b + 1,
                 self.inverted_index.max_depth(),
-            ); // k+1+|n1|=|n1|+b-ed+1
-            let last_query_prefix_len = min(
-                matching.query_prefix_len as usize + b - matching.edit_distance as usize + 1, // k+1+i_1
-                query_len,
-            ); // k+1+i1=b-m.ed+1+i1
+            );
 
+            // prove ED
             let mut check =
                 |node: NodeID, descendant: &Node<UUU, SSS>, query_prefix_len: usize| -> () {
                     // m not in P_2 for any ed
+
                     if !set.contains(query_prefix_len as UUU, node)
                         && matching.deduced_edit_distance(
                             query_prefix_len - 1,
@@ -817,37 +871,16 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                     }
                 };
 
-            for query_prefix_len in matching.query_prefix_len as usize + 1..last_query_prefix_len {
-                let character = query[query_prefix_len - 1];
-                // theorem ed-delta
-                if query_prefix_len.abs_diff(last_depth) <= b {
-                    self.traverse_inverted_index(
-                        matching.clone(),
-                        last_depth, // right. j=k+1+[n1]
-                        character,  // i<k+1+i1
-                        |id, descendant| check(id, descendant, query_prefix_len),
-                    );
-                }
-            }
+            let last_character = query[query_len - 1];
 
-            let last_character = query[last_query_prefix_len - 1]; // the index in paper starts from one.
-            for depth in self.trie.nodes[matching.node].depth as usize + 1..last_depth {
-                if last_query_prefix_len.abs_diff(depth) <= b {
-                    self.traverse_inverted_index(
-                        matching.clone(),
-                        depth, // left. j<k+1+|n1|
-                        last_character,
-                        |id, descendant| check(id, descendant, last_query_prefix_len),
-                    );
-                }
+            for depth in self.trie.nodes[matching.node].depth as usize + 1..=last_depth {
+                self.traverse_inverted_index(
+                    matching.clone(),
+                    depth,
+                    last_character,
+                    |id, descendant| check(id, descendant, query_len),
+                );
             }
-
-            self.traverse_inverted_index(
-                matching.clone(),
-                last_depth,     // j=k+1+|n1|
-                last_character, // i=k+1+|n1|
-                |id, descendant| check(id, descendant, last_query_prefix_len),
-            );
         };
 
         // Filter the input set to P(i,b-1)
@@ -875,13 +908,45 @@ fn measure_results(result: HashSet<Cow<'_, str>>, query: &str) -> Vec<MeasuredPr
 }
 
 impl Autocompleter for Yoke<MetaAutocompleter<'static>, Vec<String>> {
+    type STATE = Cache<'static>;
     fn threshold_topk(
         &self,
         query: &str,
         requested: usize,
         max_threshold: usize,
+        state: &mut Self::STATE,
     ) -> Vec<MeasuredPrefix> {
-        unimplemented!()
+        let set = self
+            .get()
+            .threshold_topk(query.into(), state, max_threshold, requested);
+        let qlen = query.chars().count();
+        let mut map: BTreeMap<u8, Vec<Matching<UUU>>> = Default::default();
+        for m in set.iter() {
+            if !map.contains_key(&m.edit_distance) {
+                map.insert(m.edit_distance, Default::default());
+            }
+            map.get_mut(&m.edit_distance).as_mut().unwrap().push(m);
+        }
+
+        let mut strs: HashSet<Cow<'_, str>> = Default::default();
+        'out: for (_ix, (ed, set)) in map.into_iter().enumerate() {
+            let k_max = max_threshold.saturating_sub(ed as usize);
+            for m1 in set {
+                let k = qlen.saturating_sub(m1.query_prefix_len as usize);
+                if k <= k_max {
+                    self.get().trie.fill_results(
+                        &self.get().trie.nodes[m1.node],
+                        &mut strs,
+                        requested,
+                    );
+                }
+                if strs.len() >= requested {
+                    break 'out;
+                }
+            }
+        }
+
+        measure_results(strs, query)
     }
 }
 

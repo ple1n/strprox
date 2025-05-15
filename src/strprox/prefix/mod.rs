@@ -6,6 +6,7 @@ pub mod fst;
 pub mod meta;
 
 pub trait Autocompleter {
+    type STATE: Default = ();
     /// Returns the `requested` number of strings with the best PEDs that are at most `max_threshold`,
     /// or all strings available with PEDs within `max_threshold`
     ///
@@ -17,6 +18,7 @@ pub trait Autocompleter {
         query: &str,
         requested: usize,
         max_threshold: usize,
+        state: &mut Self::STATE,
     ) -> Vec<MeasuredPrefix>;
 
     /// Returns the `requested` number of strings with the best PEDs, or all strings available if less than `requested`
@@ -24,9 +26,15 @@ pub trait Autocompleter {
     /// Strings are sorted by prefix edit distance and then lexicographical order
     ///
     /// Assumes `query`'s length in Unicode characters is bounded by u8; will truncate to u8::MAX characters otherwise
-    fn autocomplete(&self, query: &str, requested: usize) -> Vec<MeasuredPrefix> {
-        self.threshold_topk(query, requested, usize::MAX)
+    fn autocomplete(
+        &self,
+        query: &str,
+        requested: usize,
+        state: &mut Self::STATE,
+    ) -> Vec<MeasuredPrefix> {
+        self.threshold_topk(query, requested, 4, state)
     }
+
 }
 
 pub trait FromStrings {

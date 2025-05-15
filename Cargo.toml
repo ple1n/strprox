@@ -32,6 +32,7 @@ wasm = ["wasm-bindgen", "js-sys"]
 [dev-dependencies]
 rand = "0.8"
 generic-tests = "0.1.2"
+bincode = "2.0.1"
 
 [profile.test]
 opt-level = 3
