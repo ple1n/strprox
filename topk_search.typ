@@ -277,3 +277,13 @@ $
   "which means" P(q_(+1),b+1) "is the largest search domain needed" \
   P(q_(+1),b+N) = P(q_(+1),b+1) "when" N>1
 $
+
+== Sorting matchings
+
+$
+  "query" = (q,b) \
+  m=(a,s, Delta) \
+  forall m => cases(|a|<=|q|, Delta<=b) \
+  "the sorting uses a dimensionality reduction" \
+  f =mat(b+1, -1) mat(|a|; Delta m)
+$

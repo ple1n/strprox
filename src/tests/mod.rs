@@ -6,6 +6,7 @@ use std::{
 
 use fst::Set;
 use rand::thread_rng;
+use tracing::{debug, info};
 use yoke::Yoke;
 
 use crate::{
@@ -28,6 +29,9 @@ const WORDS: &str = include_str!("words.txt");
 
 #[generic_tests::define]
 mod generic {
+    use tracing::Level;
+    use tracing_subscriber::FmtSubscriber;
+
     use super::*;
     use crate::{levenshtein, prefix::FromStrings, Autocompleter};
 
@@ -274,42 +278,105 @@ mod generic {
     where
         A: Autocompleter + FromStrings,
     {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::INFO)
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+
         let source: Vec<_> = WORDS.lines().collect();
         let autocompleter = A::from_strings(&source);
         let mut state: A::STATE = Default::default();
         let mut rng = rand::thread_rng();
         let mut total_duration = Duration::new(0, 0);
         let mut fails = 0;
-        const ITERATIONS: usize = 1e3 as usize;
-        for _i in 0..ITERATIONS {
-            let (string, edited_string, edits) = sample_edited_string(&source, &mut rng);
+        const ITERATIONS: usize = 1e4 as usize;
+        let ed_max = 2;
+        let mut cases = Vec::new();
 
-            dbg!(&string, &edited_string);
+        for _i in 0..ITERATIONS {
+            let (string, edited_string, edits) = sample_edited_string(&source, &mut rng, ed_max);
 
             let time = Instant::now();
-            let result = &autocompleter.threshold_topk(edited_string.as_str(), 1, 5, &mut state);
+            let result =
+                &autocompleter.threshold_topk(edited_string.as_str(), 1, ed_max, &mut state);
             if result.len() == 0 {
                 fails += 1;
+                cases.push((
+                    prefix_edit_distance(string, &edited_string),
+                    string,
+                    edited_string,
+                    None,
+                ));
                 continue;
             }
             let r1 = &result[0];
             total_duration += time.elapsed();
 
-            dbg!(r1);
+            debug!("{:?}", r1);
 
             // Depending on what edits were made, the result may not necessarily be equal to `string` (e.g. 5 edits to a string with a length of 5)
             // so we do not check that
 
-            assert!(
-                prefix_edit_distance(edited_string.as_str(), r1.string.as_str())
-                    <= r1.prefix_distance,
-                "Prefix edit distance incorrect"
-            );
+            let mut assertions_hold = true;
+            assertions_hold &= r1.prefix_distance <= ed_max;
+            assertions_hold &= prefix_edit_distance(edited_string.as_str(), r1.string.as_str())
+                <= r1.prefix_distance;
+            if !assertions_hold {
+                fails += 1;
+                cases.push((
+                    prefix_edit_distance(string, &edited_string),
+                    string,
+                    edited_string,
+                    Some(r1.to_owned()),
+                ));
+            }
         }
-        println!(
-            "Average time per query: {} ms",
-            total_duration.as_millis() as f64 / (ITERATIONS - fails) as f64
+        info!(
+            "Average time per query: {} ms. Failed {fails}/{ITERATIONS}. Max ED searched {ed_max}. Total time: {}s",
+            total_duration.as_millis() as f64 / (ITERATIONS - fails) as f64,
+            total_duration.as_secs()
         );
+        dbg!(cases);
+    }
+
+    // a former bug
+    #[test]
+    fn bug_prefix_drop<A>()
+    where
+        A: Autocompleter + FromStrings,
+    {
+        let source: Vec<_> = WORDS.lines().collect();
+        let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
+        let result = &autocompleter.threshold_topk("elaxation curve", 1, 2, &mut state);
+        dbg!(result);
+        let result = &autocompleter.threshold_topk("elaxation curve", 1, 3, &mut state);
+        dbg!(result);
+        let result = &autocompleter.threshold_topk("elaxation curve", 1, 4, &mut state);
+        dbg!(result);
+    }
+
+    #[test]
+    fn bug2<A>()
+    where
+        A: Autocompleter + FromStrings,
+    {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::TRACE)
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+
+        let source: Vec<_> = WORDS.lines().collect();
+        let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
+        let q = "物不见人";
+        let result = &autocompleter.threshold_topk("物不见人", 10, 2, &mut state);
+        let pd = prefix_edit_distance(q, &result[0].string);
+        dbg!(result, pd);
     }
 
     #[instantiate_tests(<YokedMetaAutocompleter>)]
@@ -329,7 +396,7 @@ fn bench_unindexed() {
     let mut total_duration = Duration::new(0, 0);
     const ITERATIONS: usize = 1e3 as usize;
     for _i in 0..ITERATIONS {
-        let (_, edited_string, _) = sample_edited_string(&source, &mut rng);
+        let (_, edited_string, _) = sample_edited_string(&source, &mut rng, 5);
         let time = Instant::now();
         let result = &unindexed_autocomplete(edited_string.as_str(), 1, &cows)[0];
         total_duration += time.elapsed();
@@ -399,8 +466,9 @@ fn bench_noise() {
     // test random queries with a PED of at most `MAX_THRESHOLD`
     const MAX_THRESHOLD: usize = 4;
     let mut rng = thread_rng();
+    let ed = 5;
     for _i in 0..ITERATIONS {
-        let edited_string = sample_edited_string(&source, &mut rng).1;
+        let edited_string = sample_edited_string(&source, &mut rng, ed).1;
         let query = edited_string.as_str();
 
         start = Instant::now();

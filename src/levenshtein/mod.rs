@@ -3,9 +3,7 @@ use std::{cmp::min, collections::BinaryHeap};
 
 #[cfg(test)]
 use rand::{
-    distributions::{
-        Distribution, Uniform,
-    },
+    distributions::{Distribution, Uniform},
     Rng,
 };
 
@@ -65,10 +63,32 @@ pub fn prefix_edit_distance(first: &str, second: &str) -> usize {
     }
 }
 
+pub fn prefix_edit_distance_chars(first: &Vec<char>, second: &Vec<char>) -> usize {
+    match final_lev_row(&first[..], &second[..]).into_iter().min() {
+        Some(distance) => distance,
+        None => {
+            // If it's None, it means that at least one of the strings are empty, so the edit distance
+            // is the number of characters to insert into an empty string from `first`
+            debug_assert!(first.is_empty() || second.is_empty());
+            first.len()
+        }
+    }
+}
+
 /// Returns the edit distance between two char slices
 pub fn edit_distance(first: &str, second: &str) -> usize {
     let first: Vec<char> = to_char_vec(first);
     let second: Vec<char> = to_char_vec(second);
+    match final_lev_row(&first[..], &second[..]).last() {
+        Some(&distance) => distance,
+        None => {
+            debug_assert!(second.is_empty());
+            first.len()
+        }
+    }
+}
+
+pub fn edit_distance_chars(first: &[char], second: &[char]) -> usize {
     match final_lev_row(&first[..], &second[..]).last() {
         Some(&distance) => distance,
         None => {
@@ -157,11 +177,15 @@ pub(crate) fn random_edits(string: &str, edits: usize) -> String {
 /// a string with a random number of edits between 0 and 5,
 /// number of edits made)
 #[cfg(test)]
-pub(crate) fn sample_edited_string<'s>(source: &'s [&str], rng: &mut impl Rng) -> (&'s str, String, usize) {
+pub(crate) fn sample_edited_string<'s>(
+    source: &'s [&str],
+    rng: &mut impl Rng,
+    ed: usize,
+) -> (&'s str, String, usize) {
     use rand::seq::SliceRandom;
 
     let &string = source.choose(rng).unwrap();
-    let edits_distribution = Uniform::new(0, 5);
+    let edits_distribution = Uniform::new(0, ed);
     let edits = edits_distribution.sample(rng);
     let edited_string = random_edits(string, edits);
     (string, edited_string, edits)
