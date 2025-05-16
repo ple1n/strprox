@@ -29,11 +29,15 @@ const WORDS: &str = include_str!("words.txt");
 
 #[generic_tests::define]
 mod generic {
-    use tracing::Level;
+    use tracing::{warn, Level};
     use tracing_subscriber::FmtSubscriber;
 
     use super::*;
-    use crate::{levenshtein, prefix::FromStrings, Autocompleter};
+    use crate::{
+        levenshtein::{self, edit_distance},
+        prefix::FromStrings,
+        Autocompleter,
+    };
 
     #[test]
     /// Example input from the paper on META (see the citations)
@@ -291,24 +295,95 @@ mod generic {
         let mut rng = rand::thread_rng();
         let mut total_duration = Duration::new(0, 0);
         let mut fails = 0;
-        const ITERATIONS: usize = 1e4 as usize;
+        const ITERATIONS: usize = 1e2 as usize;
+        const ED: usize = 2;
+        let mut ped_results = [0; ED + 1];
+        let mut ped_given = [0; ED + 1];
+        let mut cases = Vec::new();
+
+        for _i in 0..ITERATIONS {
+            let (string, query, edits) = sample_edited_string(&source, &mut rng, ED);
+            let ped_g = prefix_edit_distance(&query, &string);
+            ped_given[ped_g] += 1;
+
+            let time = Instant::now();
+            let result = &autocompleter.threshold_topk(query.as_str(), 1, ED, &mut state);
+            total_duration += time.elapsed();
+
+            if result.len() == 0 {
+                fails += 1;
+                cases.push((prefix_edit_distance(string, &query), string, query, None));
+                continue;
+            }
+            let r1 = &result[0];
+
+            info!(
+                "{} -{}-> {}, {}, {}",
+                string, ped_g, query, r1.string, r1.prefix_distance
+            );
+
+            // Depending on what edits were made, the result may not necessarily be equal to `string` (e.g. 5 edits to a string with a length of 5)
+            // so we do not check that
+            let ped = prefix_edit_distance(query.as_str(), r1.string.as_str());
+            let mut assertions_hold = true;
+            assertions_hold &= r1.prefix_distance <= ED;
+            assertions_hold &= ped <= r1.prefix_distance;
+            assertions_hold &= r1.prefix_distance <= edits;
+            if !assertions_hold {
+                fails += 1;
+                cases.push((
+                    edit_distance(string, &query),
+                    string,
+                    query,
+                    Some(r1.to_owned()),
+                ));
+            }
+            ped_results[ped] += 1;
+        }
+        warn!(
+            "Average time per query: {} ms. Failed {fails}/{ITERATIONS}. Max ED searched {ED}. Total time: {}s. PED: {:?}. PED_Given {:?}",
+            total_duration.as_millis() as f64 / (ITERATIONS) as f64,
+            total_duration.as_secs(),
+            ped_results,
+            ped_given
+        );
+        dbg!(cases);
+    }
+
+    #[test]
+    /// Tests that prefix edit distances are within the number of edits made to strings from a database
+    /// using 1000 random data points
+    ///
+    /// Simultaneously tests that the prefix edit distances are correct
+    fn threshold<A>()
+    where
+        A: Autocompleter + FromStrings,
+    {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::INFO)
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+
+        let source: Vec<_> = WORDS.lines().collect();
+        let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
+        let mut rng = rand::thread_rng();
+        let mut total_duration = Duration::new(0, 0);
+        let mut fails = 0;
+        const ITERATIONS: usize = 1e5 as usize;
         let ed_max = 2;
         let mut cases = Vec::new();
 
         for _i in 0..ITERATIONS {
-            let (string, edited_string, edits) = sample_edited_string(&source, &mut rng, ed_max);
+            let (string, query, edits) = sample_edited_string(&source, &mut rng, ed_max);
 
             let time = Instant::now();
-            let result =
-                &autocompleter.threshold_topk(edited_string.as_str(), 1, ed_max, &mut state);
+            let result = &autocompleter.threshold_topk(query.as_str(), 1, ed_max, &mut state);
             if result.len() == 0 {
                 fails += 1;
-                cases.push((
-                    prefix_edit_distance(string, &edited_string),
-                    string,
-                    edited_string,
-                    None,
-                ));
+                cases.push((prefix_edit_distance(string, &query), string, query, None));
                 continue;
             }
             let r1 = &result[0];
@@ -321,14 +396,14 @@ mod generic {
 
             let mut assertions_hold = true;
             assertions_hold &= r1.prefix_distance <= ed_max;
-            assertions_hold &= prefix_edit_distance(edited_string.as_str(), r1.string.as_str())
-                <= r1.prefix_distance;
+            assertions_hold &=
+                prefix_edit_distance(query.as_str(), r1.string.as_str()) <= r1.prefix_distance;
             if !assertions_hold {
                 fails += 1;
                 cases.push((
-                    prefix_edit_distance(string, &edited_string),
+                    edit_distance(string, &query),
                     string,
-                    edited_string,
+                    query,
                     Some(r1.to_owned()),
                 ));
             }
@@ -374,8 +449,52 @@ mod generic {
         let autocompleter = A::from_strings(&source);
         let mut state: A::STATE = Default::default();
         let q = "物不见人";
-        let result = &autocompleter.threshold_topk("物不见人", 10, 2, &mut state);
+        let result = &autocompleter.threshold_topk(q, 10, 2, &mut state);
         let pd = prefix_edit_distance(q, &result[0].string);
+        dbg!(result, pd);
+    }
+
+    #[test]
+    fn bug3<A>()
+    where
+        A: Autocompleter + FromStrings,
+    {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::TRACE)
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+
+        let source: Vec<_> = WORDS.lines().collect();
+        let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
+        let q = "许学轺";
+        let result = &autocompleter.threshold_topk(q, 5, 2, &mut state);
+        let pd = prefix_edit_distance(q, &result[0].string);
+        dbg!(result, pd);
+    }
+
+    #[test]
+    fn bug4<A>()
+    where
+        A: Autocompleter + FromStrings,
+    {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::TRACE)
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+
+        let source: Vec<_> = WORDS.lines().collect();
+        let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
+        // optimum is "section block"
+        let q = "ection block";
+        let result = &autocompleter.threshold_topk(q, 5, 2, &mut state);
+        let pd = prefix_edit_distance(q, &result[0].string);
+
         dbg!(result, pd);
     }
 

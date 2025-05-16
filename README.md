@@ -6,6 +6,10 @@ See [math](./topk_search.typ) in Typst.
 
 The time complexity is dependent on the active matching set, and the size of tree overall, which doesn't explode as you type in longer strings.
 
+## Testing 
+
+Tracing flags from `INFO` to `TRACING` can enable code paths for self verification during algorithm execution.
+
 ## [Citations](#citations)
 ```bibtex
 @article{10.14778/2977797.2977808,

@@ -230,9 +230,19 @@ $
 
 $m.q=q$ is therefore a special case.
 
+=== Criterion of graph walking
+
+The nodes that we ever need for deriving answer set, are defined by the above equation.
+
+
 $
-  k=0=> 0<=Delta m_0<=b
+  forall m in M("answer"):=MM=>|q|-|m.q|<=b \
+  |m.q|>=|q|-b
 $
+
+denote this as rule of _m.q_, which then should $inter$ rule of $b,b+1$
+
+If we can show $MM=emptyset.rev$, then there is no answer
 
 
 == Algorithmic optimization

@@ -511,7 +511,105 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
 
         acc
     }
-    pub fn threshold_topk<'q>(
+    /// This should give the Top-K
+    /// A lack of entries with smaller PED means they don't exist
+    /// Threshold controls the range of search, which greatly influences performance
+    fn threshold_top_k(
+        &self,
+        query: &str,
+        requested: usize,
+        max_threshold: usize,
+        state: &mut Cache<'_>,
+    ) -> Vec<MeasuredPrefix> {
+        let set = self.threshold(query.into(), state, max_threshold, requested);
+        let qlen = query.chars().count();
+
+        let ped_bound = |b: usize| {
+            let mut sorted: BTreeMap<usize, Vec<Matching<UUU>>> = Default::default();
+
+            for m in set.iter() {
+                let k_max = b.saturating_sub(m.edit_distance as usize);
+                let k = qlen.saturating_sub(m.query_prefix_len as usize);
+                if m.edit_distance as usize <= b && k as usize <= k_max {
+                    let key = m.edit_distance as usize;
+                    if !sorted.contains_key(&key) {
+                        sorted.insert(key, Default::default());
+                    }
+                    sorted.get_mut(&key).as_mut().unwrap().push(m);
+                } else {
+                    // drop
+                }
+            }
+            sorted
+        };
+
+        let mut strs: HashSet<Cow<'_, str>> = Default::default();
+        'out: for b in 0..=max_threshold {
+            let sorted = ped_bound(b);
+            debug!("ped <= {b}, sorted={}", sorted.len());
+            for (_ix, (ed, set)) in sorted.into_iter().enumerate() {
+                'ped: for m in set {
+                    debug!("Fill, m.ed={}, m.q={}", m.edit_distance, m.query_prefix_len);
+                    self.trie
+                        .fill_results(&self.trie.nodes[m.node], &mut strs, requested);
+                    if strs.len() >= requested {
+                        break 'out;
+                    }
+                }
+            }
+        }
+
+        measure_results(strs, query)
+    }
+    /// Threshold but slightly ranked
+    /// Deprecated. Only for testing
+    #[deprecated]
+    fn threshold_take_longest(
+        &self,
+        query: &str,
+        requested: usize,
+        max_threshold: usize,
+        state: &mut Cache<'_>,
+    ) -> Vec<MeasuredPrefix> {
+        let set = self.threshold(query.into(), state, max_threshold, requested);
+        let qlen = query.chars().count();
+
+        let mut sorted: BTreeMap<usize, Vec<Matching<UUU>>> = Default::default();
+
+        let dim_reduce = |m: &Matching<UUU>| {
+            (max_threshold + 1) as usize * m.query_prefix_len as usize - m.edit_distance as usize
+        };
+        for m in set.iter() {
+            let k_max = max_threshold.saturating_sub(m.edit_distance as usize);
+            let k = qlen.saturating_sub(m.query_prefix_len as usize);
+            if k as usize <= k_max {
+                let key = dim_reduce(&m);
+                if !sorted.contains_key(&key) {
+                    sorted.insert(key, Default::default());
+                }
+                sorted.get_mut(&key).as_mut().unwrap().push(m);
+            } else {
+                // drop
+            }
+        }
+
+        let mut strs: HashSet<Cow<'_, str>> = Default::default();
+        debug!("sorted={}", sorted.len());
+        'out: for (_ix, (q, set)) in sorted.into_iter().rev().enumerate() {
+            for m in set {
+                debug!("Fill, m.ed={}, m.q={}", m.edit_distance, m.query_prefix_len);
+                self.trie
+                    .fill_results(&self.trie.nodes[m.node], &mut strs, requested);
+                if strs.len() >= requested {
+                    break 'out;
+                }
+            }
+        }
+
+        measure_results(strs, query)
+    }
+    /// Returns ANY string that satisfies PED(query,string)<=PED
+    pub fn threshold<'q>(
         &self,
         q: TreeString<'q>,
         cache: &mut Cache<'_>,
@@ -537,7 +635,11 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 } else {
                     // P(q,b) -> P(q+1=cursor,b)
                     let new = self.first_deducing(&acc, query_chars[ix], cursor, b);
-                    debug!("|P({}->{cursor},{b})| +{}", cursor - 1, new.matchings.len());
+                    debug!(
+                        "^ |P({}->{cursor},{b})| +{}",
+                        cursor - 1,
+                        new.matchings.len()
+                    );
                     if enabled!(Level::TRACE) {
                         new.stats(self);
                         for m in new.iter() {
@@ -564,7 +666,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                     } else {
                         // P(q,b) -> P(q,b+1)
                         let new = self.second_deducing(&acc, &query_chars, cursor, t);
-                        debug!("|P({cursor},{}->{t})| +{}", t - 1, new.matchings.len());
+                        debug!("^ |P({cursor},{}->{t})| +{}", t - 1, new.matchings.len());
                         if enabled!(Level::DEBUG) {
                             new.stats(self);
                         }
@@ -637,23 +739,30 @@ impl Display for MatchingNode<UUU> {
 }
 
 impl<'stored> Matching<UUU> {
-    /// Returns an upper bound on the edit distance between the query and a prefix of length `stored_len` that intersects
-    /// with the matching node's prefix
-    fn deduced_edit_distance(
+    /// DED has strict validity requirement
+    fn ded(
         &self,
         query_len: usize,
         stored_len: usize,
         nodes: &TrieNodes<UUU, SSS>,
-    ) -> usize {
-        self.edit_distance as usize
-            + max(
-                query_len.saturating_sub(self.query_prefix_len as usize),
-                stored_len.saturating_sub(nodes[self.node].depth as usize),
+    ) -> Option<usize> {
+        let r1 = query_len >= self.query_prefix_len as usize;
+        let r2 = stored_len >= nodes[self.node].depth as usize;
+        if r1 && r2 {
+            Some(
+                self.edit_distance as usize
+                    + max(
+                        query_len - self.query_prefix_len as usize,
+                        stored_len - nodes[self.node].depth as usize,
+                    ),
             )
+        } else {
+            None
+        }
     }
     /// Returns an upper bound on the edit distance between the query and the matching node's prefix
     fn deduced_prefix_edit_distance(&self, query_len: usize) -> usize {
-        self.edit_distance as usize + query_len.saturating_sub(self.query_prefix_len as usize)
+        self.edit_distance as usize + query_len - self.query_prefix_len as usize
     }
 }
 
@@ -863,6 +972,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         let mut edit_distances = HashMap::<usize, UUU>::new(); // Node ID to ED(q,n)
         for m1 in set.iter() {
             if m1.edit_distance <= b as UUU
+                && m1.query_prefix_len <= query_len as UUU - 1
                 && m1.query_prefix_len >= (query_len.saturating_sub(1 + b)) as UUU
             {
                 let m1_node = &self.trie.nodes[m1.node];
@@ -870,17 +980,19 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 for depth in m1_depth + 1..=min(m1_depth + b + 1, self.inverted_index.max_depth()) {
                     self.traverse_inverted_index(m1.clone(), depth, character, |id, n2| {
                         // the depth of a node is equal to the length of its associated prefix
-                        let ded = m1.deduced_edit_distance(
-                            query_len.saturating_sub(1),
-                            depth.saturating_sub(1) as usize,
+                        let ded = m1.ded(
+                            query_len - 1,
+                            depth - 1 as usize,
                             &self.trie.nodes,
                         );
-                        let ded = ded as UUU;
-                        if ded <= b as UUU {
-                            if let Some(edit_distance) = edit_distances.get_mut(&id) {
-                                *edit_distance = min(*edit_distance, ded);
-                            } else {
-                                edit_distances.insert(id, ded);
+
+                        if let Some(ded) = ded {
+                            if ded <= b  {
+                                if let Some(edit_distance) = edit_distances.get_mut(&id) {
+                                    *edit_distance = min(*edit_distance, ded as u8);
+                                } else {
+                                    edit_distances.insert(id, ded as u8);
+                                }
                             }
                         }
                     });
@@ -931,20 +1043,29 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             let mut check =
                 |node: NodeID, descendant: &Node<UUU, SSS>, query_prefix_len: usize| -> () {
                     // m not in P_2 for any ed
-
                     if !set.contains(query_prefix_len as UUU, node)
-                        && matching.deduced_edit_distance(
+                        && matching.ded(
                             query_prefix_len - 1,
                             descendant.depth as usize - 1,
                             &self.trie.nodes,
-                        ) == b
+                        ) == Some(b)
                     {
-                        let matching = Matching::<UUU> {
+                        let m_new = Matching::<UUU> {
                             query_prefix_len: query_prefix_len as UUU,
                             node,
                             edit_distance: b as UUU,
                         };
-                        set_p4.insert(matching);
+
+                        if b == 1
+                            && descendant.depth == 3
+                            && descendant.character == 'e'
+                            && query_prefix_len == 1
+                        {
+                            let mx = self.m_to_node(matching);
+                            debug!("m2 {}", mx);
+                        }
+
+                        set_p4.insert(m_new);
                     }
                 };
 
@@ -993,51 +1114,8 @@ impl Autocompleter for Yoke<MetaAutocompleter<'static>, Vec<String>> {
         max_threshold: usize,
         state: &mut Self::STATE,
     ) -> Vec<MeasuredPrefix> {
-        let set = self
-            .get()
-            .threshold_topk(query.into(), state, max_threshold, requested);
-        let qlen = query.chars().count();
-
-        for m in set.iter() {
-            let m = self.get().m_to_node(m);
-            if m.node.depth == 4 && m.edit_distance == 1 {
-                debug!("------ {m}");
-            }
-        }
-
-        let mut sorted: BTreeMap<usize, Vec<Matching<UUU>>> = Default::default();
-
-        let dim_reduce = |m: &Matching<UUU>| {
-            (max_threshold + 1) as usize * m.query_prefix_len as usize - m.edit_distance as usize
-        };
-        for m in set.iter() {
-            let k_max = max_threshold.saturating_sub(m.edit_distance as usize);
-            let k = qlen.saturating_sub(m.query_prefix_len as usize);
-            if k as usize <= k_max {
-                let key = dim_reduce(&m);
-                if !sorted.contains_key(&key) {
-                    sorted.insert(key, Default::default());
-                }
-                sorted.get_mut(&key).as_mut().unwrap().push(m);
-            } else {
-                // drop
-            }
-        }
-
-        let mut strs: HashSet<Cow<'_, str>> = Default::default();
-        'out: for (_ix, (q, set)) in sorted.into_iter().rev().enumerate() {
-            for m in set {
-                debug!("Fill, m.ed={}, m.q={}", m.edit_distance, m.query_prefix_len);
-                self.get()
-                    .trie
-                    .fill_results(&self.get().trie.nodes[m.node], &mut strs, requested);
-                if strs.len() >= requested {
-                    break 'out;
-                }
-            }
-        }
-
-        measure_results(strs, query)
+        self.get()
+            .threshold_top_k(query, requested, max_threshold, state)
     }
 }
 

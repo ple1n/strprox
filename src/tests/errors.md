@@ -22,3 +22,47 @@ successes:
 ]
 
 ```
+
+```
+2025-05-16T11:50:10.311918Z  INFO strprox::tests::generic: Average time per query: 1.6588976693007902 ms. Failed 3/10000. Max ED searched 2. Total time: 16s
+test tests::generic::meta::words_bounded_peds ... ok
+
+successes:
+
+---- tests::generic::meta::words_bounded_peds stdout ----
+[src/tests/mod.rs:342:9] cases = [
+    (
+        1,
+        "许学",
+        "许学轺",
+        Some(
+            MeasuredPrefix {
+                string: "一封轺传",
+                prefix_distance: 2,
+            },
+        ),
+    ),
+    (
+        1,
+        "分位",
+        "分位垼",
+        Some(
+            MeasuredPrefix {
+                string: "垼",
+                prefix_distance: 2,
+            },
+        ),
+    ),
+    (
+        1,
+        "古义",
+        "古义鼣",
+        Some(
+            MeasuredPrefix {
+                string: "鼣",
+                prefix_distance: 2,
+            },
+        ),
+    ),
+]
+```
