@@ -8,7 +8,7 @@ repository = "https://github.com/ple1n/strprox"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["autocomplete", "fuzzy", "algorithm", "search"]
-exclude = ["npm/", "src/tests", "/docs", "*.ts"]
+exclude = ["npm/", "src/tests", "/docs", "*.ts", "*.typ", "*.drawio"]
 categories = ["algorithms"]
 
 [lib]
@@ -21,7 +21,7 @@ debug_print = "1.0.0"
 serde = { version = "1.0", optional = true, features = ["derive"] }
 wasm-bindgen = { version = "0.2", optional = true }
 js-sys = { version = "0.3", optional = true }
-ptrie = { path = "./ptrie", version = "0.7.0"}
+metacomplete_ptrie = { version = "0.7" }
 slab = "0.4.9"
 polonius-the-crab = "0.4.1"
 derive-new = "0.6.0"
@@ -29,6 +29,7 @@ tracing = "0.1.41"
 rand = { optional = true, version = "0.8" }
 
 [features]
+fst = []
 serde = ["dep:serde"]
 wasm = ["wasm-bindgen", "js-sys"]
 test = ["dep:rand", "dep:fst"]

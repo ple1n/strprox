@@ -321,7 +321,7 @@ impl InvertedIndex<UUU, SSS> {
     }
 }
 
-use ptrie::Trie as PTrie;
+use metacomplete_ptrie::Trie as PTrie;
 
 /// Structure that allows for autocompletion based on a string dataset
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
