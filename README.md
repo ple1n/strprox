@@ -25,6 +25,24 @@ Indexing with 1.4M unique words that are repeated to expand to up to 2M, takes 6
 
 ![](publish/compare_index_building/meta/report/regression.svg)
 
+## Benchmark reports
+
+- https://ple1n.github.io/strprox/fst_varied_ed/ped_bounded/4/report/index.html
+- https://ple1n.github.io/strprox/fst_varied_ed/ped_bounded/3/report/index.html
+- https://ple1n.github.io/strprox/fst_varied_ed/ped_bounded/2/report/index.html
+- https://ple1n.github.io/strprox/fst_varied_ed/ped_bounded/1/report/index.html
+- https://ple1n.github.io/strprox/fst_varied_ed/ped_bounded/report/index.html
+- https://ple1n.github.io/strprox/fst_varied_ed/report/index.html
+- https://ple1n.github.io/strprox/compare_index_building/meta/report/index.html
+- https://ple1n.github.io/strprox/compare_index_building/fst/report/index.html
+- https://ple1n.github.io/strprox/compare_index_building/report/index.html
+- https://ple1n.github.io/strprox/meta_varied_ed/ped_bounded/4/report/index.html
+- https://ple1n.github.io/strprox/meta_varied_ed/ped_bounded/3/report/index.html
+- https://ple1n.github.io/strprox/meta_varied_ed/ped_bounded/2/report/index.html
+- https://ple1n.github.io/strprox/meta_varied_ed/ped_bounded/1/report/index.html
+- https://ple1n.github.io/strprox/meta_varied_ed/ped_bounded/report/index.html
+- https://ple1n.github.io/strprox/meta_varied_ed/report/index.html
+
 ## Testing 
 
 Tracing flags from `INFO` to `TRACING` can enable code paths for self verification during algorithm execution.
@@ -207,3 +225,9 @@ Dual-licensed under [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE). You may
 
 ### [Contributions](#contrib)
 Contributions to this project are likewise understood to be dual-licensed under MIT and Apache-2.0.
+
+## Notes 
+
+`cargo bench  --bench index -- --plotting-backend plotters` if you want to generate benchs with plotters.
+
+Run `deno -A gen_links.ts` to update links in this file
