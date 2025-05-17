@@ -29,10 +29,10 @@ tracing = "0.1.41"
 rand = { optional = true, version = "0.8" }
 
 [features]
-fst = []
+fst = ["dep:fst"]
 serde = ["dep:serde"]
 wasm = ["wasm-bindgen", "js-sys"]
-test = ["dep:rand", "dep:fst"]
+test = ["dep:rand", "fst"]
 default = ["test"]
 
 [dev-dependencies]
