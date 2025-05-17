@@ -2,6 +2,7 @@ use std::collections::BinaryHeap;
 
 use crate::MeasuredPrefix;
 
+#[cfg(feature = "fst")]
 pub mod fst;
 pub mod meta;
 
@@ -35,7 +36,6 @@ pub trait Autocompleter {
     ) -> Vec<MeasuredPrefix> {
         self.threshold_topk(query, requested, 4, state)
     }
-
 }
 
 pub trait FromStrings {

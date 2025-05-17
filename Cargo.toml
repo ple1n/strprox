@@ -1,21 +1,22 @@
 workspace = { members = ["src/tests/make_noise"] }
 [package]
-name = "strprox"
-version = "0.3.3"
+name = "metacomplete"
+version = "2.0.0"
 edition = "2021"
 description = "Top-k string autocompletion"
-repository = "https://github.com/anusarati/strprox/"
+repository = "https://github.com/ple1n/strprox"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-keywords = ["autocomplete"]
-exclude = ["npm/", "src/tests"]
+keywords = ["autocomplete", "fuzzy", "algorithm", "search"]
+exclude = ["npm/", "src/tests", "/docs", "*.ts"]
+categories = ["algorithms"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 yoke = { version = "0.7.3", features = ["derive"] }
-fst = "0.4"
+fst = { version = "0.4", optional = true }
 debug_print = "1.0.0"
 serde = { version = "1.0", optional = true, features = ["derive"] }
 wasm-bindgen = { version = "0.2", optional = true }
@@ -30,7 +31,7 @@ rand = { optional = true, version = "0.8" }
 [features]
 serde = ["dep:serde"]
 wasm = ["wasm-bindgen", "js-sys"]
-test = ["dep:rand"]
+test = ["dep:rand", "dep:fst"]
 default = ["test"]
 
 [dev-dependencies]

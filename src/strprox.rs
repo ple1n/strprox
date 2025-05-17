@@ -71,8 +71,11 @@ impl Display for MeasuredPrefix {
 //#[doc(inline)]
 #[doc(inline)]
 pub use prefix::Autocompleter;
+
+#[cfg(feature = "fst")]
 #[doc(inline)]
 pub use prefix::fst::FstAutocompleter;
+
 #[doc(inline)]
-pub use prefix::meta::MetaAutocompleter as MetaAutocompleter;
+pub use prefix::meta::MetaAutocompleter;
 //pub type StringSearcher<'a, U> = HSTree<'a, U>;

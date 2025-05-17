@@ -1,4 +1,4 @@
-# State of art prefix fuzzy autocompletion
+# State of Art Instant Prefix Fuzzy Autocompletion
 
 See [math](./topk_search.typ) in Typst.
 
@@ -11,6 +11,8 @@ At this parameter, META outperforms the common FST autocompletion algorithm used
 There are only *exact prefix search* and *fuzzy search* available non-commercially, which for SOTA, are released by https://github.com/wolfgarbe 
 
 This algorithm deals with the *prefix fuzzy search* problem, which competes with the commercial SOTA.
+
+The algorithm was originally intended for my daily driver offline dictionary [offdict](https://github.com/ple1n/offdict/) with 1.4M words indexed, which works perfectly.
 
 ## Benchmark with Criterion
 
