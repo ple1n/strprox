@@ -514,7 +514,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
     /// This should give the Top-K
     /// A lack of entries with smaller PED means they don't exist
     /// Threshold controls the range of search, which greatly influences performance
-    fn threshold_top_k(
+    pub fn threshold_top_k(
         &self,
         query: &str,
         requested: usize,
@@ -553,53 +553,6 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                     if strs.len() >= requested {
                         break 'out;
                     }
-                }
-            }
-        }
-
-        measure_results(strs, query)
-    }
-    /// Threshold but slightly ranked
-    /// Deprecated. Only for testing
-    #[deprecated]
-    fn threshold_take_longest(
-        &self,
-        query: &str,
-        requested: usize,
-        max_threshold: usize,
-        state: &mut Cache<'_>,
-    ) -> Vec<MeasuredPrefix> {
-        let set = self.threshold(query.into(), state, max_threshold, requested);
-        let qlen = query.chars().count();
-
-        let mut sorted: BTreeMap<usize, Vec<Matching<UUU>>> = Default::default();
-
-        let dim_reduce = |m: &Matching<UUU>| {
-            (max_threshold + 1) as usize * m.query_prefix_len as usize - m.edit_distance as usize
-        };
-        for m in set.iter() {
-            let k_max = max_threshold.saturating_sub(m.edit_distance as usize);
-            let k = qlen.saturating_sub(m.query_prefix_len as usize);
-            if k as usize <= k_max {
-                let key = dim_reduce(&m);
-                if !sorted.contains_key(&key) {
-                    sorted.insert(key, Default::default());
-                }
-                sorted.get_mut(&key).as_mut().unwrap().push(m);
-            } else {
-                // drop
-            }
-        }
-
-        let mut strs: HashSet<Cow<'_, str>> = Default::default();
-        debug!("sorted={}", sorted.len());
-        'out: for (_ix, (q, set)) in sorted.into_iter().rev().enumerate() {
-            for m in set {
-                debug!("Fill, m.ed={}, m.q={}", m.edit_distance, m.query_prefix_len);
-                self.trie
-                    .fill_results(&self.trie.nodes[m.node], &mut strs, requested);
-                if strs.len() >= requested {
-                    break 'out;
                 }
             }
         }
