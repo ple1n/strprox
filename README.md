@@ -9,21 +9,21 @@ The time complexity is dependent on the active matching set, and the size of tre
 
 ## Benchmark with Criterion
 
-![](./publish/meta_varied_ed/report/violin.svg)
+![](././docs/meta_varied_ed/report/violin.svg)
 
 PED of 3 is enough for most autocompletion use cases, which as the graphs shows, usually completes within 20ms.
 
 For comparison, the best former opensource implemenation is based on Levenshtein Finite State Automata. 
 
-![](publish/fst_varied_ed/report/violin.svg)
+![](./docs/fst_varied_ed/report/violin.svg)
 
 Indexing is both linear to META autocompletion and FST
 
-![](publish/compare_index_building/report/violin.svg)
+![](./docs/compare_index_building/report/violin.svg)
 
 Indexing with 1.4M unique words that are repeated to expand to up to 2M, takes 600ms
 
-![](publish/compare_index_building/meta/report/regression.svg)
+![](./docs/compare_index_building/meta/report/regression.svg)
 
 ## Benchmark reports
 
