@@ -300,8 +300,8 @@ mod generic {
         let mut rng = rand::thread_rng();
         let mut total_duration = Duration::new(0, 0);
         let mut fails = 0;
-        const ITERATIONS: usize = 1e5 as usize;
-        const ED: usize = 5;
+        const ITERATIONS: usize = 1e4 as usize;
+        const ED: usize = 4;
         let mut ped_results = [0; ED + 1];
         let mut ped_given = [0; ED + 1];
         let mut cases = Vec::new();

@@ -1,11 +1,16 @@
 # State of art prefix fuzzy autocompletion
 
-Improved implementation over original paper.
-
 See [math](./topk_search.typ) in Typst.
 
 The time complexity is dependent on the active matching set, and the size of tree overall, which doesn't explode as you type in longer strings.
 
+`PED <= 3` is the common and reasonabnle parameter for fuzzy autocompletion.
+
+At this parameter, META outperforms the common FST autocompletion algorithm used in non-commercial softwares, by 14x. (avg. 5ms for META, 70ms for FST).
+
+There are only *exact prefix search* and *fuzzy search* available non-commercially, which for SOTA, are released by https://github.com/wolfgarbe 
+
+This algorithm deals with the *prefix fuzzy search* problem, which competes with the commercial SOTA.
 
 ## Benchmark with Criterion
 
@@ -198,6 +203,192 @@ test tests::generic::meta::words_bounded_peds ... ok
 ## Known errors
 
 There are known bugs that result in *non-exhaustion* that some results exist but are not found. 
+
+You can benchmark error rates by `fn words_bounded_peds` in the tests directory
+
+```
+ WARN Total words 1442910
+ WARN Average time per query: 0.12648 ms. Failed 0/100000. Max ED searched 1. Total time: 12s. PED: [55647, 44353]. PED_Given [53522, 46478]
+test tests::generic::meta::words_bounded_peds ... ok
+
+
+ WARN Total words 1442910
+ WARN Average time per query: 0.101086 ms. Failed 0/1000000. Max ED searched 1. Total time: 101s. PED: [553811, 446189]. PED_Given [532239, 467761]
+test tests::generic::meta::words_bounded_peds ... ok
+```
+
+As above, with low PED parameter the algorithm rarely misses results. 
+
+```
+ WARN Total words 1442910
+ WARN Average time per query: 1.23232 ms. Failed 8/100000. Max ED searched 2. Total time: 123s. PED: [40395, 36192, 23405]. PED_Given [37201, 37210, 25589]
+test tests::generic::meta::words_bounded_peds ... ok
+
+successes:
+
+---- tests::generic::meta::words_bounded_peds stdout ----
+[src/tests/mod.rs:356:9] cases = [
+    (
+        2,
+        "overdrive housing adapter plate",
+        "erdrive housing adapter plate",
+        None,
+    ),
+    (
+        2,
+        "mantle rock",
+        "ntle rock",
+        None,
+    ),
+    (
+        2,
+        "taxpayer personally filling returns",
+        "xpayer personally filling returns",
+        None,
+    ),
+    (
+        2,
+        "frame keystone",
+        "ame keystone",
+        None,
+    ),
+    (
+        2,
+        "acid esters",
+        "id esters",
+        None,
+    ),
+    (
+        2,
+        "vanillic aldehyde",
+        "nillic aldehyde",
+        None,
+    ),
+    (
+        2,
+        "double insurance",
+        "uble insurance",
+        None,
+    ),
+    (
+        2,
+        "comprehensive system",
+        "mprehensive system",
+        None,
+    ),
+]
+
+
+ WARN Total words 1442910
+ WARN Average time per query: 13.0908 ms. Failed 3/10000. Max ED searched 3. Total time: 130s. PED: [3299, 3112, 2284, 1303]. PED_Given [2895, 3159, 2460, 1486]
+test tests::generic::meta::words_bounded_peds ... ok
+
+successes:
+
+---- tests::generic::meta::words_bounded_peds stdout ----
+[src/tests/mod.rs:356:9] cases = [
+    (
+        3,
+        "widen differences in personal income",
+        "den differencDes in personal income",
+        None,
+    ),
+    (
+        2,
+        "cloudless air",
+        "oudless air",
+        Some(
+            MeasuredPrefix {
+                string: "endless abrasive belt",
+                prefix_distance: 3,
+            },
+        ),
+    ),
+    (
+        3,
+        "muscular socket",
+        "scular sncket",
+        None,
+    ),
+]
+
+```
+
+When `PED <= 2` or `PED <=3` is set as the bound, errors happen at `1e-4` rate perhaps due to implementation error.
+
+```
+ WARN Total words 1442910
+ WARN Average time per query: 66.3074 ms. Failed 7/10000. Max ED searched 4. Total time: 663s. PED: [2831, 2766, 2078, 1556, 765]. PED_Given [2340, 2743, 2242, 1777, 898]
+test tests::generic::meta::words_bounded_peds ... ok
+
+successes:
+
+---- tests::generic::meta::words_bounded_peds stdout ----
+[src/tests/mod.rs:356:9] cases = [
+    (
+        3,
+        "soil heat conduction",
+        "il hea9 conduction",
+        Some(
+            MeasuredPrefix {
+                string: "heat conduction",
+                prefix_distance: 4,
+            },
+        ),
+    ),
+    (
+        3,
+        "inverse-flame",
+        "verse-Ilame",
+        Some(
+            MeasuredPrefix {
+                string: "Persea americana Mill.",
+                prefix_distance: 4,
+            },
+        ),
+    ),
+    (
+        3,
+        "angle globe valve",
+        "gle globe vlve",
+        Some(
+            MeasuredPrefix {
+                string: "hose globe valve",
+                prefix_distance: 4,
+            },
+        ),
+    ),
+    (
+        4,
+        "data file converter",
+        "ta fie con2verter",
+        None,
+    ),
+    (
+        4,
+        "familial hypophosphatemia",
+        "milial hypophsEphatemia",
+        None,
+    ),
+    (
+        4,
+        "maximum-minimum principle",
+        "ximumNA-minimum principle",
+        None,
+    ),
+    (
+        4,
+        "physical goods",
+        "ysicap goFods",
+        None,
+    ),
+]
+
+```
+
+When `PED<=4`, the error rate is `1/1000`. In the log above it either returned suboptimal results or did not find the answer.
+
+I do not want to invest more time in this algorithm because I don't like it despite the good-enough results.
 
 ## [Citations](#citations)
 ```bibtex
