@@ -1,3 +1,4 @@
+
 use std::{
     fs,
     io::Write,
@@ -283,7 +284,11 @@ mod generic {
         A: Autocompleter + FromStrings,
     {
         let subscriber = FmtSubscriber::builder()
-            .with_max_level(Level::INFO)
+            .with_max_level(Level::WARN)
+            .with_line_number(false)
+            .without_time()
+            .with_file(false)
+            .with_target(false)
             .finish();
 
         tracing::subscriber::set_global_default(subscriber)
@@ -295,8 +300,8 @@ mod generic {
         let mut rng = rand::thread_rng();
         let mut total_duration = Duration::new(0, 0);
         let mut fails = 0;
-        const ITERATIONS: usize = 1e2 as usize;
-        const ED: usize = 2;
+        const ITERATIONS: usize = 1e5 as usize;
+        const ED: usize = 5;
         let mut ped_results = [0; ED + 1];
         let mut ped_given = [0; ED + 1];
         let mut cases = Vec::new();
@@ -318,7 +323,7 @@ mod generic {
             let r1 = &result[0];
 
             info!(
-                "{} -{}-> {}, {}, {}",
+                "{} >{}> {}, {}, {}",
                 string, ped_g, query, r1.string, r1.prefix_distance
             );
 
@@ -340,6 +345,7 @@ mod generic {
             }
             ped_results[ped] += 1;
         }
+        warn!("Total words {}", source.len());
         warn!(
             "Average time per query: {} ms. Failed {fails}/{ITERATIONS}. Max ED searched {ED}. Total time: {}s. PED: {:?}. PED_Given {:?}",
             total_duration.as_millis() as f64 / (ITERATIONS) as f64,
@@ -493,6 +499,31 @@ mod generic {
         // optimum is "section block"
         let q = "ection block";
         let result = &autocompleter.threshold_topk(q, 5, 2, &mut state);
+        let pd = prefix_edit_distance(q, &result[0].string);
+
+        dbg!(result, pd);
+    }
+
+    /// unsolved
+    #[test]
+    fn bug5<A>()
+    where
+        A: Autocompleter + FromStrings,
+    {
+        let subscriber = FmtSubscriber::builder()
+            .with_max_level(Level::TRACE)
+            .finish();
+
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("setting default subscriber failed");
+
+        let source: Vec<_> = WORDS.lines().collect();
+        let autocompleter = A::from_strings(&source);
+        let mut state: A::STATE = Default::default();
+        let optimal = "sterilized water";
+        let q = "erilXzed water";
+        dbg!(prefix_edit_distance(q, optimal));
+        let result = &autocompleter.threshold_topk(q, 10, 3, &mut state);
         let pd = prefix_edit_distance(q, &result[0].string);
 
         dbg!(result, pd);

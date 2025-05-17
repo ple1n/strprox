@@ -22,6 +22,7 @@ pub struct FstAutocompleter<D: AsRef<[u8]>> {
 }
 
 impl<D: AsRef<[u8]>> Autocompleter for FstAutocompleter<D> {
+    const NAME: &'static str = "fst";
     fn threshold_topk(
         &self,
         query: &str,

@@ -25,19 +25,32 @@ slab = "0.4.9"
 polonius-the-crab = "0.4.1"
 derive-new = "0.6.0"
 tracing = "0.1.41"
+rand = { optional = true, version = "0.8" }
 
 [features]
 serde = ["dep:serde"]
 wasm = ["wasm-bindgen", "js-sys"]
+test = ["dep:rand"]
+default = ["test"]
 
 [dev-dependencies]
-rand = "0.8"
 generic-tests = "0.1.2"
-bincode = "2.0.1"
 tracing-subscriber = "0.3.19"
+criterion = { version = "0.6", features = ["html_reports"] }
 
 [profile.test]
 opt-level = 3
 
 [profile.release]
+opt-level = 3
+
+[[bench]]
+name = "basic_meta"
+harness = false
+
+[[bench]]
+name = "index"
+harness = false
+
+[profile.bench]
 opt-level = 3

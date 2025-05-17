@@ -6,6 +6,7 @@ pub mod fst;
 pub mod meta;
 
 pub trait Autocompleter {
+    const NAME: &'static str;
     type STATE: Default = ();
     /// Returns the `requested` number of strings with the best PEDs that are at most `max_threshold`,
     /// or all strings available with PEDs within `max_threshold`

@@ -1,7 +1,7 @@
 use crate::{MeasuredPrefix, TreeString};
 use std::{cmp::min, collections::BinaryHeap};
 
-#[cfg(test)]
+#[cfg(feature = "test")]
 use rand::{
     distributions::{Distribution, Uniform},
     Rng,
@@ -121,18 +121,18 @@ pub fn unindexed_autocomplete(
 /// Returns a string with a number of random `edits` to `string`
 ///
 /// Does not guarantee that the edits are non-overlapping (edit distance may be less than `edits`)
-#[cfg(test)]
+#[cfg(feature = "test")]
 pub(crate) fn random_edits(string: &str, edits: usize) -> String {
-    use rand::distributions::Standard;
+    use rand::distributions::{Alphanumeric, Standard};
 
     let mut string: Vec<char> = string.chars().collect();
 
     let edit_type_distribution = Uniform::new_inclusive(1, 3);
-    let char_distribution = Standard;
+    let char_distribution = Alphanumeric;
     let mut rng = rand::thread_rng();
 
     for _i in 0..edits {
-        let character = char_distribution.sample(&mut rng);
+        let character: char = char_distribution.sample(&mut rng) as char;
         let edit_type;
         if string.is_empty() {
             // can only insert
@@ -176,8 +176,9 @@ pub(crate) fn random_edits(string: &str, edits: usize) -> String {
 /// (a random string from `source`,
 /// a string with a random number of edits between 0 and 5,
 /// number of edits made)
-#[cfg(test)]
-pub(crate) fn sample_edited_string<'s>(
+
+#[cfg(feature = "test")]
+pub fn sample_edited_string<'s>(
     source: &'s [&str],
     rng: &mut impl Rng,
     ed: usize,
@@ -185,7 +186,7 @@ pub(crate) fn sample_edited_string<'s>(
     use rand::seq::SliceRandom;
 
     let &string = source.choose(rng).unwrap();
-    let edits_distribution = Uniform::new(0, ed);
+    let edits_distribution = Uniform::new_inclusive(0, ed);
     let edits = edits_distribution.sample(rng);
     let edited_string = random_edits(string, edits);
     (string, edited_string, edits)

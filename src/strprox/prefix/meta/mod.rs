@@ -536,9 +536,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                         sorted.insert(key, Default::default());
                     }
                     sorted.get_mut(&key).as_mut().unwrap().push(m);
-                } else {
-                    // drop
-                }
+                } 
             }
             sorted
         };
@@ -617,12 +615,12 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         num_entries: usize,
     ) -> MatchingSet<UUU> {
         let use_cache = true;
+        let optimize_b_1 = true;
         let query_chars: Vec<char> = q.chars().collect();
         let qlen = query_chars.len();
         let mut acc = MatchingSet::new_trie(&self.trie);
         let mut b = 0; // b of previous P(q)
         debug!("qlen={}", qlen);
-        let optimize_b_1 = true;
         cache.visit(
             q.clone(),
             |ix, ps| {
@@ -1107,6 +1105,7 @@ fn measure_results(result: HashSet<Cow<'_, str>>, query: &str) -> Vec<MeasuredPr
 
 impl Autocompleter for Yoke<MetaAutocompleter<'static>, Vec<String>> {
     type STATE = Cache<'static>;
+    const NAME: &'static str = "meta";
     fn threshold_topk(
         &self,
         query: &str,
