@@ -6,7 +6,11 @@ The time complexity is dependent on the active matching set, and the size of tre
 
 `PED <= 3` is the common and reasonabnle parameter for fuzzy autocompletion.
 
-At this parameter, META outperforms the common FST autocompletion algorithm used in non-commercial softwares, by 14x. (avg. 5ms for META, 70ms for FST).
+At this parameter, META outperforms the common FST autocompletion algorithm used in non-commercial softwares, by 5x. (avg. 16ms for META, 85ms for FST), *on average*. 
+
+___META performs well with long queries___, when many other algorithms come with penalty as the query string increases in length.
+
+___META is correct___, meaning all possible matching results are returned.
 
 There are only *exact prefix search* and *fuzzy search* available non-commercially, which for SOTA, are released by https://github.com/wolfgarbe 
 
@@ -171,226 +175,46 @@ successes:
 ---- tests::generic::meta::words_bounded_peds stdout ----
 [src/tests/mod.rs:355:9] cases = []
 
-
-
 running 1 test
  WARN Total words 1442910
- WARN Average time per query: 16.2 ms. Failed 1/100. Max ED searched 3. Total time: 1s. PED: [39, 26, 25, 9]. PED_Given [33, 32, 24, 11]
-test tests::generic::meta::words_bounded_peds ... ok
+ WARN Average time per query: 0.13052 ms. Failed 0/100000. Max ed searched 1. Total time: 13s. PED: [55444, 44556]. PED_Given [53247, 46753]
+ WARN Total words 1442910
+ WARN Average time per query: 1.9838 ms. Failed 0/10000. Max ed searched 2. Total time: 19s. PED: [4054, 3580, 2366]. PED_Given [3734, 3682, 2584]
+ WARN Total words 1442910
+ WARN Average time per query: 21.935 ms. Failed 0/1000. Max ed searched 3. Total time: 21s. PED: [313, 305, 238, 144]. PED_Given [265, 325, 255, 155]
+test tests::generic::meta::varied_ed2 has been running for over 60 seconds
+ WARN Total words 1442910
+ WARN Average time per query: 124.21 ms. Failed 0/100. Max ed searched 4. Total time: 12s. PED: [31, 21, 18, 25, 5]. PED_Given [27, 18, 25, 25, 5]
+test tests::generic::meta::varied_ed2 ... ok
 
 successes:
 
----- tests::generic::meta::words_bounded_peds stdout ----
-[src/tests/mod.rs:355:9] cases = [
-    (
-        3,
-        "sterilized water",
-        "erilXzed water",
-        None,
-    ),
-]
+---- tests::generic::meta::varied_ed2 stdout ----
+[src/tests/mod.rs:387:9] cases = []
+[src/tests/mod.rs:387:9] cases = []
+[src/tests/mod.rs:387:9] cases = []
+[src/tests/mod.rs:387:9] cases = []
 
-running 1 test
- WARN Total words 1442910
- WARN Average time per query: 75.67 ms. Failed 0/100. Max ED searched 4. Total time: 7s. PED: [25, 23, 22, 19, 11]. PED_Given [23, 24, 22, 19, 12]
-test tests::generic::meta::words_bounded_peds ... ok
 
-running 1 test
+ WARN meta Average time per query: 0 ms. Failed 0/1. Max ED searched 4. Total time: 0s. PED: [1, 0, 0, 0, 0]. PED_Given [1, 0, 0, 0, 0]
+[benches/basic_meta.rs:106:9] cases = []
+ WARN meta Average time per query: 0 ms. Failed 0/1. Max ED searched 4. Total time: 0s. PED: [1, 0, 0, 0, 0]. PED_Given [1, 0, 0, 0, 0]
+[benches/basic_meta.rs:106:9] cases = []
+ WARN meta Average time per query: 113 ms. Failed 0/1. Max ED searched 4. Total time: 0s. PED: [0, 1, 0, 0, 0]. PED_Given [0, 1, 0, 0, 0]
+[benches/basic_meta.rs:106:9] cases = []
+meta_varied_ed/ped_bounded/4
+                        time:   [76.338 ms 88.638 ms 100.63 ms]
+                        change: [−27.138% −10.438% +8.6736%] (p = 0.27 > 0.05)
+                        No change in performance detected.
  WARN Total words 1442910
- WARN Average time per query: 249.84 ms. Failed 0/100. Max ED searched 5. Total time: 24s. PED: [20, 16, 26, 19, 11, 8]. PED_Given [16, 16, 23, 20, 17, 8]
-test tests::generic::meta::words_bounded_peds ... ok
+
+ WARN Total fails for META: 0
 
 ```
 
 ## Known errors
 
-There are known bugs that result in *non-exhaustion* that some results exist but are not found. 
-
-You can benchmark error rates by `fn words_bounded_peds` in the tests directory
-
-```
- WARN Total words 1442910
- WARN Average time per query: 0.12648 ms. Failed 0/100000. Max ED searched 1. Total time: 12s. PED: [55647, 44353]. PED_Given [53522, 46478]
-test tests::generic::meta::words_bounded_peds ... ok
-
-
- WARN Total words 1442910
- WARN Average time per query: 0.101086 ms. Failed 0/1000000. Max ED searched 1. Total time: 101s. PED: [553811, 446189]. PED_Given [532239, 467761]
-test tests::generic::meta::words_bounded_peds ... ok
-```
-
-As above, with low PED parameter the algorithm rarely misses results. 
-
-```
- WARN Total words 1442910
- WARN Average time per query: 1.23232 ms. Failed 8/100000. Max ED searched 2. Total time: 123s. PED: [40395, 36192, 23405]. PED_Given [37201, 37210, 25589]
-test tests::generic::meta::words_bounded_peds ... ok
-
-successes:
-
----- tests::generic::meta::words_bounded_peds stdout ----
-[src/tests/mod.rs:356:9] cases = [
-    (
-        2,
-        "overdrive housing adapter plate",
-        "erdrive housing adapter plate",
-        None,
-    ),
-    (
-        2,
-        "mantle rock",
-        "ntle rock",
-        None,
-    ),
-    (
-        2,
-        "taxpayer personally filling returns",
-        "xpayer personally filling returns",
-        None,
-    ),
-    (
-        2,
-        "frame keystone",
-        "ame keystone",
-        None,
-    ),
-    (
-        2,
-        "acid esters",
-        "id esters",
-        None,
-    ),
-    (
-        2,
-        "vanillic aldehyde",
-        "nillic aldehyde",
-        None,
-    ),
-    (
-        2,
-        "double insurance",
-        "uble insurance",
-        None,
-    ),
-    (
-        2,
-        "comprehensive system",
-        "mprehensive system",
-        None,
-    ),
-]
-
-
- WARN Total words 1442910
- WARN Average time per query: 13.0908 ms. Failed 3/10000. Max ED searched 3. Total time: 130s. PED: [3299, 3112, 2284, 1303]. PED_Given [2895, 3159, 2460, 1486]
-test tests::generic::meta::words_bounded_peds ... ok
-
-successes:
-
----- tests::generic::meta::words_bounded_peds stdout ----
-[src/tests/mod.rs:356:9] cases = [
-    (
-        3,
-        "widen differences in personal income",
-        "den differencDes in personal income",
-        None,
-    ),
-    (
-        2,
-        "cloudless air",
-        "oudless air",
-        Some(
-            MeasuredPrefix {
-                string: "endless abrasive belt",
-                prefix_distance: 3,
-            },
-        ),
-    ),
-    (
-        3,
-        "muscular socket",
-        "scular sncket",
-        None,
-    ),
-]
-
-```
-
-When `PED <= 2` or `PED <=3` is set as the bound, errors happen at `1e-4` rate perhaps due to implementation error.
-
-```
- WARN Total words 1442910
- WARN Average time per query: 66.3074 ms. Failed 7/10000. Max ED searched 4. Total time: 663s. PED: [2831, 2766, 2078, 1556, 765]. PED_Given [2340, 2743, 2242, 1777, 898]
-test tests::generic::meta::words_bounded_peds ... ok
-
-successes:
-
----- tests::generic::meta::words_bounded_peds stdout ----
-[src/tests/mod.rs:356:9] cases = [
-    (
-        3,
-        "soil heat conduction",
-        "il hea9 conduction",
-        Some(
-            MeasuredPrefix {
-                string: "heat conduction",
-                prefix_distance: 4,
-            },
-        ),
-    ),
-    (
-        3,
-        "inverse-flame",
-        "verse-Ilame",
-        Some(
-            MeasuredPrefix {
-                string: "Persea americana Mill.",
-                prefix_distance: 4,
-            },
-        ),
-    ),
-    (
-        3,
-        "angle globe valve",
-        "gle globe vlve",
-        Some(
-            MeasuredPrefix {
-                string: "hose globe valve",
-                prefix_distance: 4,
-            },
-        ),
-    ),
-    (
-        4,
-        "data file converter",
-        "ta fie con2verter",
-        None,
-    ),
-    (
-        4,
-        "familial hypophosphatemia",
-        "milial hypophsEphatemia",
-        None,
-    ),
-    (
-        4,
-        "maximum-minimum principle",
-        "ximumNA-minimum principle",
-        None,
-    ),
-    (
-        4,
-        "physical goods",
-        "ysicap goFods",
-        None,
-    ),
-]
-
-```
-
-When `PED<=4`, the error rate is `1/1000`. In the log above it either returned suboptimal results or did not find the answer.
-
-I do not want to invest more time in this algorithm because I don't like it despite the good-enough results.
+Errors have been fixed. I suspect the original paper is full of errors
 
 ## [Citations](#citations)
 ```bibtex

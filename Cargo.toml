@@ -47,7 +47,7 @@ opt-level = 3
 opt-level = 3
 
 [[bench]]
-name = "basic_meta"
+name = "varied_ed"
 harness = false
 
 [[bench]]

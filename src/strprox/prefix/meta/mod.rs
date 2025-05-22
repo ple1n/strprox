@@ -6,6 +6,7 @@ use std::{
         hash_map, BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet,
     },
     fmt::{Display, Write},
+    io::Read,
     marker::PhantomData,
     ops::Range,
     sync::{Mutex, RwLock},
@@ -376,8 +377,8 @@ impl<'x> Cache<'x> {
 
 #[derive(Debug)]
 pub struct PState {
-    /// vec index as key, b -> P(i,b) delta
-    sets: Vec<MatchingSet<UUU>>,
+    /// b -> P(i,b) delta
+    sets: BTreeMap<usize, MatchingSet<UUU>>,
     /// last visit
     prio: Mutex<Instant>,
     ix: usize,
@@ -460,57 +461,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         }
         cache.lru.prio = cache.lru.prio.split_off(&cutoff);
     }
-    /// P(|q|,b)
-    pub fn assemble<'q>(&self, q: TreeString<'q>, cache: &mut Cache<'_>) -> MatchingSet<UUU> {
-        let use_cache = true;
-        let query_chars: Vec<char> = q.chars().collect();
-        // -0-0- .... -0-|
-        //               | 1
-        //               | 2
-        let qlen = query_chars.len();
-        let mut acc = MatchingSet::new_trie(&self.trie);
-        cache.visit(
-            q.clone(),
-            |ix, ps| {
-                if let Some(k) = ps.sets.get(0)
-                    && use_cache
-                {
-                    println!("|{}| add matchings {}", ix, k.matchings.len());
-                    acc.extend(k);
-                } else {
-                    println!("|{}| 1st-deduce set len={}", ix, acc.matchings.len());
-                    let delta = self.first_deducing(&acc, query_chars[ix], ix + 1, 0);
-                    acc.extend(&delta);
-                    ps.sets = vec![delta];
-                }
-                if ix == qlen - 1 && qlen > 0 {
-                    for t in 1..=2 {
-                        if let Some(cached) = ps.sets.get(t)
-                            && use_cache
-                        {
-                            println!("|{}| add matchings {}", ix, cached.matchings.len());
-                            acc.extend(cached);
-                        } else {
-                            let new =
-                                self.second_deducing(&acc, &query_chars, query_chars.len(), t);
-                            println!(
-                                "|{}| 2nd-deduce {} set-len={}",
-                                ix,
-                                query_chars.len(),
-                                new.matchings.len()
-                            );
-                            acc.extend(&new);
-                            assert!(ps.sets.len() - 1 == t - 1);
-                            ps.sets.push(new);
-                        }
-                    }
-                }
-            },
-            qlen,
-        );
-
-        acc
-    }
+   
     /// This should give the Top-K
     /// A lack of entries with smaller PED means they don't exist
     /// Threshold controls the range of search, which greatly influences performance
@@ -528,15 +479,15 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             let mut sorted: BTreeMap<usize, Vec<Matching<UUU>>> = Default::default();
 
             for m in set.iter() {
-                let k_max = b.saturating_sub(m.edit_distance as usize);
-                let k = qlen.saturating_sub(m.query_prefix_len as usize);
-                if m.edit_distance as usize <= b && k as usize <= k_max {
+                let k_max = b as isize - m.edit_distance as isize;
+                let k = qlen as isize - m.query_prefix_len as isize;
+                if m.edit_distance as usize <= b && k as isize <= k_max {
                     let key = m.edit_distance as usize;
                     if !sorted.contains_key(&key) {
                         sorted.insert(key, Default::default());
                     }
                     sorted.get_mut(&key).as_mut().unwrap().push(m);
-                } 
+                }
             }
             sorted
         };
@@ -567,6 +518,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
         max_ped: usize,
         num_entries: usize,
     ) -> MatchingSet<UUU> {
+        // In case of errors, try disabling cache here
         let use_cache = true;
         let optimize_b_1 = true;
         let query_chars: Vec<char> = q.chars().collect();
@@ -579,7 +531,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
             |ix, ps| {
                 let cursor = ix + 1;
                 debug!("cursor at {}", cursor);
-                if let Some(k) = ps.sets.get(0)
+                if let Some(k) = ps.sets.get(&b)
                     && use_cache
                 {
                     acc.extend(k);
@@ -602,12 +554,12 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                         }
                     }
                     acc.extend(&new);
-                    ps.sets = vec![new];
+                    ps.sets.insert(b, new);
                 }
 
                 let mut max_b = b;
-                for t in b + 1..=min(b + 1, max_ped) {
-                    if let Some(new) = ps.sets.get(t)
+                for t in b + 1..=max_ped {
+                    if let Some(new) = ps.sets.get(&t)
                         && use_cache
                     {
                         if !optimize_b_1 || new.matchings.len() > 0 {
@@ -625,7 +577,7 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                             max_b = max_b.max(t);
                         }
                         acc.extend(&new);
-                        ps.sets.push(new);
+                        ps.sets.insert(t, new);
                     }
                 }
                 b = min(max_ped, max_b);
@@ -852,37 +804,7 @@ impl MatchingRankKey {
 }
 
 impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
-    /// Returns the top `requested` number of strings with the best prefix distance from the query
-    /// sorted by prefix edit distance and then lexicographical order,
-    /// or all strings available if `requested` is larger than the number stored
-    ///
-    /// Assumes `query`'s length in Unicode characters is bounded by UUU; will truncate to UUU::MAX characters otherwise
-    pub fn autocomplete(&'_ self, query: &str, cache: &mut Cache<'_>) -> Vec<MeasuredPrefix> {
-        let set = self.assemble(query.into(), cache);
-        let mut map: BTreeMap<MatchingRankKey, BTreeSet<NodeID>> = BTreeMap::new();
-        for m in set.iter() {
-            match map.entry(MatchingRankKey::from_matching(m, &self.trie.nodes, query)) {
-                Entry::Occupied(mut oc) => {
-                    oc.get_mut().insert(m.node);
-                }
-                Entry::Vacant(va) => {
-                    va.insert(BTreeSet::from_iter([m.node]));
-                }
-            }
-        }
-        let mut strs: HashSet<Cow<'_, str>> = Default::default();
-        for (ix, (k, set)) in map.into_iter().enumerate() {
-            println!("{:?} set-len={}", k, set.len());
-            if ix < 4 {
-                for id in set {
-                    let x = strs.len();
-                    self.trie
-                        .fill_results(&self.trie.nodes[id], &mut strs, x + 3);
-                }
-            }
-        } // zorepinephrine
-        measure_results(strs, query)
-    }
+   
     /// Applies the `visitor` function to all descendants in the inverted index at `depth` and `character` of `matching.node`
     fn traverse_inverted_index<'a, VisitorFn>(
         &'a self,
@@ -931,14 +853,10 @@ impl<'stored> MetaAutocompleter<'stored, UUU, SSS> {
                 for depth in m1_depth + 1..=min(m1_depth + b + 1, self.inverted_index.max_depth()) {
                     self.traverse_inverted_index(m1.clone(), depth, character, |id, n2| {
                         // the depth of a node is equal to the length of its associated prefix
-                        let ded = m1.ded(
-                            query_len - 1,
-                            depth - 1 as usize,
-                            &self.trie.nodes,
-                        );
+                        let ded = m1.ded(query_len - 1, depth - 1 as usize, &self.trie.nodes);
 
                         if let Some(ded) = ded {
-                            if ded <= b  {
+                            if ded <= b {
                                 if let Some(edit_distance) = edit_distances.get_mut(&id) {
                                     *edit_distance = min(*edit_distance, ded as u8);
                                 } else {

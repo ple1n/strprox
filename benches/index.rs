@@ -10,7 +10,7 @@ use tracing::{debug, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 use yoke::Yoke;
 
-use strprox::{
+use metacomplete::{
     levenshtein::{
         edit_distance, prefix_edit_distance, sample_edited_string, unindexed_autocomplete,
     },
