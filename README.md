@@ -24,6 +24,12 @@ The algorithm was originally intended for my daily driver offline dictionary [of
 
 [plot](./docs/ped3.html)
 
+## This is the norm, not a cherry-pick
+
+![alt text](image.png)
+
+Average user experience with [offdict](https://github.com/ple1n/offdict/) on a linux machine.
+
 ## Benchmark with Criterion
 
 ![](././docs/meta_varied_ed/report/violin.svg)
@@ -41,6 +47,8 @@ Indexing is both linear to META autocompletion and FST
 Indexing with 1.4M unique words that are repeated to expand to up to 2M, takes 600ms
 
 ![](./docs/compare_index_building/meta/report/regression.svg)
+
+
 
 ## Benchmark reports
 
