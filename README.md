@@ -18,6 +18,12 @@ This algorithm deals with the *prefix fuzzy search* problem, which competes with
 
 The algorithm was originally intended for my daily driver offline dictionary [offdict](https://github.com/ple1n/offdict/) with 1.4M words indexed, which works perfectly.
 
+## Lookup time does not explode
+
+![](./docs/plot3.png)
+
+[plot](./docs/ped3.html)
+
 ## Benchmark with Criterion
 
 ![](././docs/meta_varied_ed/report/violin.svg)
