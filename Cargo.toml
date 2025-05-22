@@ -2,7 +2,7 @@ workspace = { members = ["src/tests/make_noise", "stats"] }
 
 [package]
 name = "metacomplete"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 description = "Top-k string autocompletion"
 repository = "https://github.com/ple1n/strprox"
