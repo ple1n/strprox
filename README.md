@@ -1,4 +1,4 @@
-# State of Art Instant Prefix Fuzzy Autocompletion
+# Matching-based Instant Prefix Fuzzy Autocompletion
 
 See [math](./topk_search.typ) in Typst.
 
