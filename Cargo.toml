@@ -1,4 +1,4 @@
-workspace = { members = ["src/tests/make_noise", "stats"] }
+# workspace = { members = ["src/tests/make_noise", "stats"] }
 
 [package]
 name = "metacomplete"
